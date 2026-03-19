@@ -12,15 +12,19 @@ This is a Rust port of the upstream SDKs and is currently in technical preview.
 
 ## Install
 
-Once published, add:
+This crate is currently distributed through GitHub releases, not crates.io.
+Use the matching Git tag in `Cargo.toml`:
 
 ```toml
 [dependencies]
-copilot-sdk = "0.1.32-1"
+copilot-sdk = { git = "https://github.com/ITM007/copilot-sdk-rust.git", tag = "v0.1.32-1" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
-For development from this repository:
+Cargo consumes the repository tag, not the uploaded release asset. If you need
+to pin an exact commit instead of a release tag, use `rev = "<commit-sha>"`.
+
+For local development from a checkout:
 
 ```toml
 [dependencies]

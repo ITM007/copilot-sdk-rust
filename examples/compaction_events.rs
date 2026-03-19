@@ -95,7 +95,9 @@ async fn main() -> copilot_sdk::Result<()> {
                 if let Some(ref tokens) = complete.compaction_tokens_used {
                     println!(
                         "    Compaction cost: in={} out={} cached={}",
-                        tokens.input as i64, tokens.output as i64, tokens.cached_input as i64,
+                        tokens.input as i64,
+                        tokens.output as i64,
+                        tokens.cached_input as i64,
                     );
                 }
             }

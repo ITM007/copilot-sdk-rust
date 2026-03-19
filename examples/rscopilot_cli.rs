@@ -13,13 +13,13 @@
 //! - `/approvals bypass all`: auto-approve all permission requests (no prompts)
 
 use copilot_sdk::{
-    find_copilot_cli, Client, LogLevel, PermissionRequest, PermissionRequestResult, SessionConfig,
-    SessionEventData, SystemMessageConfig, SystemMessageMode,
+    Client, LogLevel, PermissionRequest, PermissionRequestResult, SessionConfig,
+    SessionEventData, SystemMessageConfig, SystemMessageMode, find_copilot_cli,
 };
 use std::io::{self, Write};
 use std::sync::{
-    atomic::{AtomicU8, Ordering},
     Arc,
+    atomic::{AtomicU8, Ordering},
 };
 
 #[repr(u8)]
@@ -81,13 +81,17 @@ async fn create_session(
 
     let handler_mode = approval_mode.clone();
     session
-        .register_permission_handler(move |req| match handler_mode.load(Ordering::Relaxed) {
-            m if m == ApprovalMode::BypassAll as u8 => PermissionRequestResult::approved(),
-            _ => {
-                if prompt_approve(req) {
+        .register_permission_handler(move |req| {
+            match handler_mode.load(Ordering::Relaxed) {
+                m if m == ApprovalMode::BypassAll as u8 => {
                     PermissionRequestResult::approved()
-                } else {
-                    PermissionRequestResult::denied()
+                }
+                _ => {
+                    if prompt_approve(req) {
+                        PermissionRequestResult::approved()
+                    } else {
+                        PermissionRequestResult::denied()
+                    }
                 }
             }
         })
@@ -125,7 +129,8 @@ async fn main() -> copilot_sdk::Result<()> {
     client.start().await?;
 
     let approval_mode = Arc::new(AtomicU8::new(ApprovalMode::Ask as u8));
-    let (mut session, mut events) = create_session(&client, approval_mode.clone()).await?;
+    let (mut session, mut events) =
+        create_session(&client, approval_mode.clone()).await?;
     println!("Session: {}", session.session_id());
     print_help(ApprovalMode::Ask);
 
@@ -152,13 +157,16 @@ async fn main() -> copilot_sdk::Result<()> {
                 "clear" => {
                     println!("Clearing session...");
                     let _ = session.destroy().await;
-                    (session, events) = create_session(&client, approval_mode.clone()).await?;
+                    (session, events) =
+                        create_session(&client, approval_mode.clone()).await?;
                     println!("Session: {}", session.session_id());
                 }
                 "approvals" => {
                     if args.is_empty() {
                         let mode = match approval_mode.load(Ordering::Relaxed) {
-                            m if m == ApprovalMode::BypassAll as u8 => ApprovalMode::BypassAll,
+                            m if m == ApprovalMode::BypassAll as u8 => {
+                                ApprovalMode::BypassAll
+                            }
                             _ => ApprovalMode::Ask,
                         };
                         print_help(mode);
@@ -174,7 +182,9 @@ async fn main() -> copilot_sdk::Result<()> {
                 }
                 "help" => {
                     let mode = match approval_mode.load(Ordering::Relaxed) {
-                        m if m == ApprovalMode::BypassAll as u8 => ApprovalMode::BypassAll,
+                        m if m == ApprovalMode::BypassAll as u8 => {
+                            ApprovalMode::BypassAll
+                        }
                         _ => ApprovalMode::Ask,
                     };
                     print_help(mode);
@@ -213,7 +223,10 @@ async fn main() -> copilot_sdk::Result<()> {
                         io::stdout().flush().ok();
                     }
                     SessionEventData::ToolExecutionComplete(t) => {
-                        println!("\n[tool done] {} success={}", t.tool_call_id, t.success);
+                        println!(
+                            "\n[tool done] {} success={}",
+                            t.tool_call_id, t.success
+                        );
                         if let Some(err) = &t.error {
                             eprintln!("[tool error] {}", err.message);
                         }

@@ -11,3 +11,6 @@ Cargo.lock
 # OS
 .DS_Store
 Thumbs.db
+
+# Local upstream SDK checkout used for parity work only
+/copilot-sdk/

@@ -154,14 +154,12 @@ impl CopilotProcess {
 
         // Create transport from stdio handles
         let transport = if options.redirect_stdin && options.redirect_stdout {
-            let stdin = child
-                .stdin
-                .take()
-                .ok_or_else(|| CopilotError::InvalidConfig("Failed to capture stdin".into()))?;
-            let stdout = child
-                .stdout
-                .take()
-                .ok_or_else(|| CopilotError::InvalidConfig("Failed to capture stdout".into()))?;
+            let stdin = child.stdin.take().ok_or_else(|| {
+                CopilotError::InvalidConfig("Failed to capture stdin".into())
+            })?;
+            let stdout = child.stdout.take().ok_or_else(|| {
+                CopilotError::InvalidConfig("Failed to capture stdout".into())
+            })?;
             Some(StdioTransport::new(stdin, stdout))
         } else {
             None

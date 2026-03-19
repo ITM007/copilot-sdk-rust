@@ -74,7 +74,11 @@ pub fn normalize_result(result: Value) -> ToolResultObject {
 /// );
 /// // Register on session: session.register_tool_with_handler(tool, Some(handler)).await;
 /// ```
-pub fn define_tool(name: &str, description: &str, parameters_schema: Option<Value>) -> Tool {
+pub fn define_tool(
+    name: &str,
+    description: &str,
+    parameters_schema: Option<Value>,
+) -> Tool {
     Tool {
         name: name.to_string(),
         description: description.to_string(),

@@ -16,7 +16,7 @@ Once published, add:
 
 ```toml
 [dependencies]
-copilot-sdk = "0.1"
+copilot-sdk = "0.1.32"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
@@ -48,6 +48,18 @@ async fn main() -> copilot_sdk::Result<()> {
 
 ## Features
 
+The Rust SDK already covers the main SDK workflows:
+
+- stdio and TCP transports
+- session create/resume/list/delete plus foreground-session APIs
+- streaming events, hooks, custom tools, and ask-user/user input forwarding
+- MCP servers, custom agents, attachments, BYOK, reasoning effort, and infinite sessions
+- typed session RPC helpers for model, mode, plan, workspace, agent, fleet, compaction, and log flows
+
+### Protocol compatibility
+
+Startup accepts the same CLI protocol range documented upstream: `2..=3`.
+
 ### Infinite Sessions
 
 Automatic context window management that compacts conversation history when approaching token limits:
@@ -58,6 +70,10 @@ let config = SessionConfig {
     ..Default::default()
 };
 ```
+
+Typed helpers are available for workspace state too: `plan_read`, `plan_update`,
+`plan_delete`, `workspace_list_files`, `workspace_read_file`, and
+`workspace_create_file`.
 
 ### Custom Tools
 
@@ -81,7 +97,25 @@ session.register_tool_with_handler(
 let status = client.get_status().await?;       // CLI version info
 let auth = client.get_auth_status().await?;    // Authentication state
 let models = client.list_models().await?;      // Available models
+
+let session = client.create_session(SessionConfig::default()).await?;
+let mode = session.get_mode().await?;
+session.set_mode(copilot_sdk::AgentMode::Plan).await?;
+let current_model = session.get_current_model().await?;
+session.switch_model("claude-sonnet-4.5", Some("high")).await?;
+session
+    .log("Switched model", Some(copilot_sdk::SessionLogLevel::Info), None)
+    .await?;
+session.disconnect().await?;
 ```
+
+### Hooks and ask-user
+
+See:
+
+- `examples/hooks.rs`
+- `examples/user_input.rs`
+- `examples/permission_callback.rs`
 
 ### BYOK (Bring Your Own Key)
 
@@ -141,6 +175,7 @@ Set `COPILOT_SDK_RUST_SNAPSHOT_DIR` or `UPSTREAM_SNAPSHOTS` to point at `copilot
 ## Notes
 
 - Supports stdio (spawned CLI) and TCP (spawned or external server).
+- Protocol negotiation accepts CLI protocol versions `2..=3`.
 
 ## License
 

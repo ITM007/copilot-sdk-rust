@@ -8,17 +8,25 @@
 use crate::error::{CopilotError, Result};
 use crate::events::{SessionEvent, SessionEventData};
 use crate::types::{
-    ErrorOccurredHookInput, MessageOptions, PermissionRequest, PermissionRequestResult,
-    PostToolUseHookInput, PreToolUseHookInput, SessionEndHookInput, SessionHooks,
-    SessionStartHookInput, Tool, ToolResultObject, UserInputInvocation, UserInputRequest,
-    UserInputResponse, UserPromptSubmittedHookInput,
+    AgentMode, ErrorOccurredHookInput, MessageOptions, PermissionRequest,
+    PermissionRequestResult, PostToolUseHookInput, PreToolUseHookInput,
+    SessionAgentGetCurrentResult, SessionAgentInfo, SessionAgentListResult,
+    SessionAgentSelectResult, SessionCompactionCompactResult, SessionEndHookInput,
+    SessionFleetStartResult, SessionHooks, SessionLogLevel, SessionLogResult,
+    SessionModeGetResult, SessionModeSetResult, SessionModelGetCurrentResult,
+    SessionModelSwitchToResult, SessionPlanReadResult, SessionStartHookInput,
+    SessionWorkspaceListFilesResult, SessionWorkspaceReadFileResult, Tool,
+    ToolResultObject, UserInputInvocation, UserInputRequest, UserInputResponse,
+    UserPromptSubmittedHookInput,
 };
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 
 // =============================================================================
 // Event Handler Types
@@ -35,13 +43,119 @@ pub type PermissionHandler =
 pub type ToolHandler = Arc<dyn Fn(&str, &Value) -> ToolResultObject + Send + Sync>;
 
 /// Handler for user input requests.
-pub type UserInputHandler =
-    Arc<dyn Fn(&UserInputRequest, &UserInputInvocation) -> UserInputResponse + Send + Sync>;
+pub type UserInputHandler = Arc<
+    dyn Fn(&UserInputRequest, &UserInputInvocation) -> UserInputResponse + Send + Sync,
+>;
 
 /// Type alias for the invoke future.
-pub type InvokeFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send>>;
+pub type InvokeFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send>>;
 
 type InvokeFn = dyn Fn(&str, Option<Value>) -> InvokeFuture + Send + Sync;
+
+fn parse_response<T: DeserializeOwned>(method: &str, result: Value) -> Result<T> {
+    serde_json::from_value(result).map_err(|e| {
+        CopilotError::Protocol(format!("Failed to parse {} response: {}", method, e))
+    })
+}
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else {
+        "panic without message".to_string()
+    }
+}
+
+fn tool_response_payload(
+    session_id: &str,
+    request_id: &str,
+    result: ToolResultObject,
+) -> Value {
+    if result.result_type == "failure" {
+        if let Some(error) = result.error.clone().filter(|error| !error.is_empty()) {
+            return serde_json::json!({
+                "sessionId": session_id,
+                "requestId": request_id,
+                "error": error,
+            });
+        }
+    }
+
+    serde_json::json!({
+        "sessionId": session_id,
+        "requestId": request_id,
+        "result": result,
+    })
+}
+
+async fn handle_broadcast_request_event(
+    session_id: String,
+    state: Arc<RwLock<SessionState>>,
+    invoke_fn: Arc<InvokeFn>,
+    event: SessionEvent,
+) {
+    match event.data {
+        SessionEventData::ExternalToolRequested(data) => {
+            let handler = {
+                let state = state.read().await;
+                state
+                    .tools
+                    .get(&data.tool_name)
+                    .and_then(|registered| registered.handler.clone())
+            };
+
+            let Some(handler) = handler else {
+                return;
+            };
+
+            let tool_name = data.tool_name;
+            let request_id = data.request_id;
+            let arguments = data.arguments.unwrap_or(Value::Null);
+            let payload = match catch_unwind(AssertUnwindSafe(|| {
+                handler(&tool_name, &arguments)
+            })) {
+                Ok(result) => tool_response_payload(&session_id, &request_id, result),
+                Err(panic) => serde_json::json!({
+                    "sessionId": session_id,
+                    "requestId": request_id,
+                    "error": format!("tool panic: {}", panic_message(panic)),
+                }),
+            };
+
+            let _ =
+                (invoke_fn)("session.tools.handlePendingToolCall", Some(payload)).await;
+        }
+        SessionEventData::PermissionRequested(data) => {
+            let handler = {
+                let state = state.read().await;
+                state.permission_handler.clone()
+            };
+
+            let Some(handler) = handler else {
+                return;
+            };
+
+            let result =
+                catch_unwind(AssertUnwindSafe(|| handler(&data.permission_request)))
+                    .unwrap_or_else(|_| PermissionRequestResult::denied());
+            let payload = serde_json::json!({
+                "sessionId": session_id,
+                "requestId": data.request_id,
+                "result": result,
+            });
+
+            let _ = (invoke_fn)(
+                "session.permissions.handlePendingPermissionRequest",
+                Some(payload),
+            )
+            .await;
+        }
+        _ => {}
+    }
+}
 
 // =============================================================================
 // Event Subscription
@@ -56,7 +170,9 @@ pub struct EventSubscription {
 
 impl EventSubscription {
     /// Receive the next event.
-    pub async fn recv(&mut self) -> std::result::Result<SessionEvent, broadcast::error::RecvError> {
+    pub async fn recv(
+        &mut self,
+    ) -> std::result::Result<SessionEvent, broadcast::error::RecvError> {
         self.receiver.recv().await
     }
 }
@@ -144,7 +260,11 @@ impl Session {
     /// Create a new session.
     ///
     /// This is typically called by the Client when creating a session.
-    pub fn new<F>(session_id: String, workspace_path: Option<String>, invoke_fn: F) -> Self
+    pub fn new<F>(
+        session_id: String,
+        workspace_path: Option<String>,
+        invoke_fn: F,
+    ) -> Self
     where
         F: Fn(&str, Option<Value>) -> InvokeFuture + Send + Sync + 'static,
     {
@@ -199,7 +319,7 @@ impl Session {
     /// Register a callback-based event handler.
     ///
     /// Returns an unsubscribe closure. Call it to remove the handler.
-    /// Alternatively, use [`off`] with the internal handler ID.
+    /// Alternatively, use [`Self::off`] with the internal handler ID.
     pub async fn on<F>(&self, handler: F) -> impl FnOnce()
     where
         F: Fn(&SessionEvent) + Send + Sync + 'static,
@@ -224,8 +344,25 @@ impl Session {
 
     /// Dispatch an event to all subscribers.
     ///
-    /// This is called by the Client when events are received.
+    /// Broadcast request events are also adapted to the same tool and permission
+    /// handlers used by legacy v2 RPC callbacks.
     pub async fn dispatch_event(&self, event: SessionEvent) {
+        if matches!(
+            &event.data,
+            SessionEventData::ExternalToolRequested(_)
+                | SessionEventData::PermissionRequested(_)
+        ) {
+            let state = Arc::clone(&self.state);
+            let invoke_fn = Arc::clone(&self.invoke_fn);
+            let session_id = self.session_id.clone();
+            tokio::spawn(handle_broadcast_request_event(
+                session_id,
+                state,
+                invoke_fn,
+                event.clone(),
+            ));
+        }
+
         // Send to broadcast channel
         let _ = self.event_tx.send(event.clone());
 
@@ -304,6 +441,239 @@ impl Session {
         Ok(events)
     }
 
+    /// Get the current session mode.
+    pub async fn mode_get(&self) -> Result<SessionModeGetResult> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+        });
+        let result = (self.invoke_fn)("session.mode.get", Some(params)).await?;
+        parse_response("session.mode.get", result)
+    }
+
+    /// Convenience wrapper for the active session mode.
+    pub async fn get_mode(&self) -> Result<AgentMode> {
+        Ok(self.mode_get().await?.mode)
+    }
+
+    /// Set the current session mode.
+    pub async fn mode_set(&self, mode: AgentMode) -> Result<SessionModeSetResult> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+            "mode": mode,
+        });
+        let result = (self.invoke_fn)("session.mode.set", Some(params)).await?;
+        parse_response("session.mode.set", result)
+    }
+
+    /// Convenience wrapper for switching the active session mode.
+    pub async fn set_mode(&self, mode: AgentMode) -> Result<AgentMode> {
+        Ok(self.mode_set(mode).await?.mode)
+    }
+
+    /// Get the current session model.
+    pub async fn model_get_current(&self) -> Result<SessionModelGetCurrentResult> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+        });
+        let result = (self.invoke_fn)("session.model.getCurrent", Some(params)).await?;
+        parse_response("session.model.getCurrent", result)
+    }
+
+    /// Convenience wrapper for the active model identifier.
+    pub async fn get_current_model(&self) -> Result<Option<String>> {
+        Ok(self.model_get_current().await?.model_id)
+    }
+
+    /// Switch the session to a different model.
+    pub async fn model_switch_to(
+        &self,
+        model_id: &str,
+        reasoning_effort: Option<&str>,
+    ) -> Result<SessionModelSwitchToResult> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+            "modelId": model_id,
+            "reasoningEffort": reasoning_effort,
+        });
+        let result = (self.invoke_fn)("session.model.switchTo", Some(params)).await?;
+        parse_response("session.model.switchTo", result)
+    }
+
+    /// Convenience wrapper for switching models and returning the active model.
+    pub async fn switch_model(
+        &self,
+        model_id: &str,
+        reasoning_effort: Option<&str>,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .model_switch_to(model_id, reasoning_effort)
+            .await?
+            .model_id)
+    }
+
+    /// Emit a session log entry into the timeline.
+    pub async fn log_event(
+        &self,
+        message: &str,
+        level: Option<SessionLogLevel>,
+        ephemeral: Option<bool>,
+    ) -> Result<SessionLogResult> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+            "message": message,
+            "level": level,
+            "ephemeral": ephemeral,
+        });
+        let result = (self.invoke_fn)("session.log", Some(params)).await?;
+        parse_response("session.log", result)
+    }
+
+    /// Convenience wrapper that returns the emitted session log event ID.
+    pub async fn log(
+        &self,
+        message: &str,
+        level: Option<SessionLogLevel>,
+        ephemeral: Option<bool>,
+    ) -> Result<String> {
+        Ok(self.log_event(message, level, ephemeral).await?.event_id)
+    }
+
+    /// Read the workspace `plan.md` file for an infinite session.
+    pub async fn plan_read(&self) -> Result<SessionPlanReadResult> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+        });
+        let result = (self.invoke_fn)("session.plan.read", Some(params)).await?;
+        parse_response("session.plan.read", result)
+    }
+
+    /// Update the workspace `plan.md` file for an infinite session.
+    pub async fn plan_update(&self, content: &str) -> Result<()> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+            "content": content,
+        });
+        (self.invoke_fn)("session.plan.update", Some(params)).await?;
+        Ok(())
+    }
+
+    /// Delete the workspace `plan.md` file for an infinite session.
+    pub async fn plan_delete(&self) -> Result<()> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+        });
+        (self.invoke_fn)("session.plan.delete", Some(params)).await?;
+        Ok(())
+    }
+
+    /// List relative file paths within the workspace `files/` directory.
+    pub async fn workspace_list_files(&self) -> Result<Vec<String>> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+        });
+        let result =
+            (self.invoke_fn)("session.workspace.listFiles", Some(params)).await?;
+        Ok(parse_response::<SessionWorkspaceListFilesResult>(
+            "session.workspace.listFiles",
+            result,
+        )?
+        .files)
+    }
+
+    /// Read a file from the workspace `files/` directory.
+    pub async fn workspace_read_file(&self, path: &str) -> Result<String> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+            "path": path,
+        });
+        let result = (self.invoke_fn)("session.workspace.readFile", Some(params)).await?;
+        Ok(parse_response::<SessionWorkspaceReadFileResult>(
+            "session.workspace.readFile",
+            result,
+        )?
+        .content)
+    }
+
+    /// Create or overwrite a file in the workspace `files/` directory.
+    pub async fn workspace_create_file(&self, path: &str, content: &str) -> Result<()> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+            "path": path,
+            "content": content,
+        });
+        (self.invoke_fn)("session.workspace.createFile", Some(params)).await?;
+        Ok(())
+    }
+
+    /// Start fleet mode for the session.
+    pub async fn fleet_start(&self, prompt: Option<&str>) -> Result<bool> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+            "prompt": prompt,
+        });
+        let result = (self.invoke_fn)("session.fleet.start", Some(params)).await?;
+        Ok(
+            parse_response::<SessionFleetStartResult>("session.fleet.start", result)?
+                .started,
+        )
+    }
+
+    /// List available custom agents for the session.
+    pub async fn agent_list(&self) -> Result<Vec<SessionAgentInfo>> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+        });
+        let result = (self.invoke_fn)("session.agent.list", Some(params)).await?;
+        Ok(
+            parse_response::<SessionAgentListResult>("session.agent.list", result)?
+                .agents,
+        )
+    }
+
+    /// Get the currently selected custom agent, if any.
+    pub async fn agent_get_current(&self) -> Result<Option<SessionAgentInfo>> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+        });
+        let result = (self.invoke_fn)("session.agent.getCurrent", Some(params)).await?;
+        Ok(parse_response::<SessionAgentGetCurrentResult>(
+            "session.agent.getCurrent",
+            result,
+        )?
+        .agent)
+    }
+
+    /// Select a custom agent for the session.
+    pub async fn agent_select(&self, name: &str) -> Result<SessionAgentInfo> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+            "name": name,
+        });
+        let result = (self.invoke_fn)("session.agent.select", Some(params)).await?;
+        Ok(
+            parse_response::<SessionAgentSelectResult>("session.agent.select", result)?
+                .agent,
+        )
+    }
+
+    /// Deselect the current custom agent and return to the default agent.
+    pub async fn agent_deselect(&self) -> Result<()> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+        });
+        (self.invoke_fn)("session.agent.deselect", Some(params)).await?;
+        Ok(())
+    }
+
+    /// Trigger manual compaction for the session.
+    pub async fn compaction_compact(&self) -> Result<SessionCompactionCompactResult> {
+        let params = serde_json::json!({
+            "sessionId": self.session_id,
+        });
+        let result = (self.invoke_fn)("session.compaction.compact", Some(params)).await?;
+        parse_response("session.compaction.compact", result)
+    }
+
     // =========================================================================
     // Tool Management
     // =========================================================================
@@ -314,7 +684,11 @@ impl Session {
     }
 
     /// Register a tool with a handler.
-    pub async fn register_tool_with_handler(&self, tool: Tool, handler: Option<ToolHandler>) {
+    pub async fn register_tool_with_handler(
+        &self,
+        tool: Tool,
+        handler: Option<ToolHandler>,
+    ) {
         let mut state = self.state.write().await;
         let name = tool.name.clone();
         state.tools.insert(name, RegisteredTool { tool, handler });
@@ -348,17 +722,20 @@ impl Session {
     }
 
     /// Invoke a tool handler.
-    pub async fn invoke_tool(&self, name: &str, arguments: &Value) -> Result<ToolResultObject> {
+    pub async fn invoke_tool(
+        &self,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<ToolResultObject> {
         let state = self.state.read().await;
         let registered = state
             .tools
             .get(name)
             .ok_or_else(|| CopilotError::ToolNotFound(name.to_string()))?;
 
-        let handler = registered
-            .handler
-            .as_ref()
-            .ok_or_else(|| CopilotError::ToolError(format!("No handler for tool: {}", name)))?;
+        let handler = registered.handler.as_ref().ok_or_else(|| {
+            CopilotError::ToolError(format!("No handler for tool: {}", name))
+        })?;
 
         Ok(handler(name, arguments))
     }
@@ -401,7 +778,10 @@ impl Session {
     /// Register a handler for user input requests from the server.
     pub async fn register_user_input_handler<F>(&self, handler: F)
     where
-        F: Fn(&UserInputRequest, &UserInputInvocation) -> UserInputResponse + Send + Sync + 'static,
+        F: Fn(&UserInputRequest, &UserInputInvocation) -> UserInputResponse
+            + Send
+            + Sync
+            + 'static,
     {
         let mut state = self.state.write().await;
         state.user_input_handler = Some(Arc::new(handler));
@@ -451,7 +831,11 @@ impl Session {
     ///
     /// Dispatches to the appropriate hook handler based on `hook_type` and returns
     /// the serialized output JSON.
-    pub async fn handle_hooks_invoke(&self, hook_type: &str, input: &Value) -> Result<Value> {
+    pub async fn handle_hooks_invoke(
+        &self,
+        hook_type: &str,
+        input: &Value,
+    ) -> Result<Value> {
         let state = self.state.read().await;
         let hooks = match &state.hooks {
             Some(h) => h,
@@ -461,9 +845,12 @@ impl Session {
         match hook_type {
             "preToolUse" => {
                 if let Some(handler) = &hooks.on_pre_tool_use {
-                    let hook_input: PreToolUseHookInput = serde_json::from_value(input.clone())
-                        .map_err(|e| {
-                            CopilotError::Protocol(format!("Invalid preToolUse input: {}", e))
+                    let hook_input: PreToolUseHookInput =
+                        serde_json::from_value(input.clone()).map_err(|e| {
+                            CopilotError::Protocol(format!(
+                                "Invalid preToolUse input: {}",
+                                e
+                            ))
                         })?;
                     let output = handler(hook_input);
                     Ok(serde_json::to_value(output).unwrap_or(Value::Null))
@@ -473,9 +860,12 @@ impl Session {
             }
             "postToolUse" => {
                 if let Some(handler) = &hooks.on_post_tool_use {
-                    let hook_input: PostToolUseHookInput = serde_json::from_value(input.clone())
-                        .map_err(|e| {
-                            CopilotError::Protocol(format!("Invalid postToolUse input: {}", e))
+                    let hook_input: PostToolUseHookInput =
+                        serde_json::from_value(input.clone()).map_err(|e| {
+                            CopilotError::Protocol(format!(
+                                "Invalid postToolUse input: {}",
+                                e
+                            ))
                         })?;
                     let output = handler(hook_input);
                     Ok(serde_json::to_value(output).unwrap_or(Value::Null))
@@ -500,10 +890,13 @@ impl Session {
             }
             "sessionStart" => {
                 if let Some(handler) = &hooks.on_session_start {
-                    let hook_input: SessionStartHookInput = serde_json::from_value(input.clone())
-                        .map_err(|e| {
-                        CopilotError::Protocol(format!("Invalid sessionStart input: {}", e))
-                    })?;
+                    let hook_input: SessionStartHookInput =
+                        serde_json::from_value(input.clone()).map_err(|e| {
+                            CopilotError::Protocol(format!(
+                                "Invalid sessionStart input: {}",
+                                e
+                            ))
+                        })?;
                     let output = handler(hook_input);
                     Ok(serde_json::to_value(output).unwrap_or(Value::Null))
                 } else {
@@ -512,9 +905,12 @@ impl Session {
             }
             "sessionEnd" => {
                 if let Some(handler) = &hooks.on_session_end {
-                    let hook_input: SessionEndHookInput = serde_json::from_value(input.clone())
-                        .map_err(|e| {
-                            CopilotError::Protocol(format!("Invalid sessionEnd input: {}", e))
+                    let hook_input: SessionEndHookInput =
+                        serde_json::from_value(input.clone()).map_err(|e| {
+                            CopilotError::Protocol(format!(
+                                "Invalid sessionEnd input: {}",
+                                e
+                            ))
                         })?;
                     let output = handler(hook_input);
                     Ok(serde_json::to_value(output).unwrap_or(Value::Null))
@@ -524,9 +920,12 @@ impl Session {
             }
             "errorOccurred" => {
                 if let Some(handler) = &hooks.on_error_occurred {
-                    let hook_input: ErrorOccurredHookInput = serde_json::from_value(input.clone())
-                        .map_err(|e| {
-                            CopilotError::Protocol(format!("Invalid errorOccurred input: {}", e))
+                    let hook_input: ErrorOccurredHookInput =
+                        serde_json::from_value(input.clone()).map_err(|e| {
+                            CopilotError::Protocol(format!(
+                                "Invalid errorOccurred input: {}",
+                                e
+                            ))
                         })?;
                     let output = handler(hook_input);
                     Ok(serde_json::to_value(output).unwrap_or(Value::Null))
@@ -542,13 +941,31 @@ impl Session {
     // Lifecycle
     // =========================================================================
 
-    /// Destroy the session.
-    pub async fn destroy(&self) -> Result<()> {
+    async fn clear_local_state(&self) {
+        let mut state = self.state.write().await;
+        state.tools.clear();
+        state.permission_handler = None;
+        state.user_input_handler = None;
+        state.hooks = None;
+        state.event_handlers.clear();
+    }
+
+    /// Disconnect the session and release local in-memory handlers.
+    ///
+    /// Session state on disk is preserved and can be resumed later.
+    pub async fn disconnect(&self) -> Result<()> {
         let params = serde_json::json!({
             "sessionId": self.session_id,
         });
 
         (self.invoke_fn)("session.destroy", Some(params)).await?;
+        self.clear_local_state().await;
+        Ok(())
+    }
+
+    /// Destroy the session and release local in-memory handlers.
+    pub async fn destroy(&self) -> Result<()> {
+        self.disconnect().await?;
         Ok(())
     }
 }
@@ -565,7 +982,10 @@ impl Session {
     ///
     /// Returns the last assistant message event, or None if no message was received.
     /// Uses the specified timeout, or 60 seconds if None.
-    pub async fn wait_for_idle(&self, timeout: Option<Duration>) -> Result<Option<SessionEvent>> {
+    pub async fn wait_for_idle(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<Option<SessionEvent>> {
         let timeout = timeout.unwrap_or(Self::DEFAULT_TIMEOUT);
         let mut subscription = self.subscribe();
         let mut last_assistant_message: Option<SessionEvent> = None;
@@ -682,6 +1102,8 @@ impl Session {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+    use tokio::sync::mpsc;
+    use tokio::time::timeout;
 
     fn mock_invoke(_method: &str, _params: Option<Value>) -> InvokeFuture {
         Box::pin(async { Ok(serde_json::json!({"messageId": "test-msg-123"})) })
@@ -702,6 +1124,19 @@ mod tests {
             }
             Ok(serde_json::json!({"messageId": "test-msg-123"}))
         })
+    }
+
+    fn recording_invoke(
+        tx: mpsc::UnboundedSender<(String, Option<Value>)>,
+    ) -> impl Fn(&str, Option<Value>) -> InvokeFuture + Send + Sync + 'static {
+        move |method: &str, params: Option<Value>| {
+            let method = method.to_string();
+            let tx = tx.clone();
+            Box::pin(async move {
+                let _ = tx.send((method, params));
+                Ok(serde_json::json!({ "success": true }))
+            })
+        }
     }
 
     #[tokio::test]
@@ -820,6 +1255,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_dispatch_event_handles_external_tool_requested_v3() {
+        let (rpc_tx, mut rpc_rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, recording_invoke(rpc_tx));
+        let mut subscription = session.subscribe();
+
+        session
+            .register_tool_with_handler(
+                Tool::new("echo"),
+                Some(Arc::new(|_, args| {
+                    ToolResultObject::text(
+                        args.get("text")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("missing"),
+                    )
+                })),
+            )
+            .await;
+
+        let event = SessionEvent::from_json(&serde_json::json!({
+            "id": "evt-external-tool",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "type": "external_tool.requested",
+            "data": {
+                "requestId": "request-1",
+                "sessionId": "test",
+                "toolCallId": "tool-call-1",
+                "toolName": "echo",
+                "arguments": { "text": "hello" }
+            }
+        }))
+        .unwrap();
+
+        session.dispatch_event(event.clone()).await;
+
+        let received_event = subscription.recv().await.unwrap();
+        assert_eq!(received_event.id, event.id);
+
+        let (method, params) = timeout(Duration::from_secs(1), rpc_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(method, "session.tools.handlePendingToolCall");
+        assert_eq!(
+            params.unwrap(),
+            serde_json::json!({
+                "sessionId": "test",
+                "requestId": "request-1",
+                "result": {
+                    "textResultForLlm": "hello",
+                    "resultType": "success"
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_event_ignores_external_tool_requested_without_handler() {
+        let (rpc_tx, mut rpc_rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, recording_invoke(rpc_tx));
+
+        let event = SessionEvent::from_json(&serde_json::json!({
+            "id": "evt-external-tool-miss",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "type": "external_tool.requested",
+            "data": {
+                "requestId": "request-2",
+                "sessionId": "test",
+                "toolCallId": "tool-call-2",
+                "toolName": "missing"
+            }
+        }))
+        .unwrap();
+
+        session.dispatch_event(event).await;
+        tokio::task::yield_now().await;
+
+        assert!(
+            timeout(Duration::from_millis(50), rpc_rx.recv())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn test_permission_handler() {
         let session = Session::new("test".to_string(), None, mock_invoke);
 
@@ -842,6 +1361,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_dispatch_event_handles_permission_requested_v3() {
+        let (rpc_tx, mut rpc_rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, recording_invoke(rpc_tx));
+        let mut subscription = session.subscribe();
+
+        session
+            .register_permission_handler(|request| {
+                assert_eq!(request.kind, "shell");
+                PermissionRequestResult::approved()
+            })
+            .await;
+
+        let event = SessionEvent::from_json(&serde_json::json!({
+            "id": "evt-permission",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "type": "permission.requested",
+            "data": {
+                "requestId": "request-3",
+                "permissionRequest": {
+                    "kind": "shell",
+                    "toolCallId": "tool-call-3",
+                    "fullCommandText": "ls"
+                }
+            }
+        }))
+        .unwrap();
+
+        session.dispatch_event(event.clone()).await;
+
+        let received_event = subscription.recv().await.unwrap();
+        assert_eq!(received_event.id, event.id);
+
+        let (method, params) = timeout(Duration::from_secs(1), rpc_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(method, "session.permissions.handlePendingPermissionRequest");
+        assert_eq!(
+            params.unwrap(),
+            serde_json::json!({
+                "sessionId": "test",
+                "requestId": "request-3",
+                "result": {
+                    "kind": "approved"
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_event_ignores_permission_requested_without_handler() {
+        let (rpc_tx, mut rpc_rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, recording_invoke(rpc_tx));
+
+        let event = SessionEvent::from_json(&serde_json::json!({
+            "id": "evt-permission-miss",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "type": "permission.requested",
+            "data": {
+                "requestId": "request-4",
+                "permissionRequest": {
+                    "kind": "shell"
+                }
+            }
+        }))
+        .unwrap();
+
+        session.dispatch_event(event).await;
+        tokio::task::yield_now().await;
+
+        assert!(
+            timeout(Duration::from_millis(50), rpc_rx.recv())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn test_get_messages_with_events_field() {
         let session = Session::new("test".to_string(), None, mock_invoke_with_events);
         let messages = session.get_messages().await.unwrap();
@@ -850,6 +1447,249 @@ mod tests {
             messages[0].data,
             crate::events::SessionEventData::SessionIdle(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn test_mode_get_uses_session_rpc() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, move |method, params| {
+            let method = method.to_string();
+            let params_clone = params.clone();
+            let tx = tx.clone();
+            Box::pin(async move {
+                let _ = tx.send((method, params_clone));
+                Ok(serde_json::json!({ "mode": "plan" }))
+            })
+        });
+
+        let result = session.mode_get().await.unwrap();
+        assert_eq!(result.mode, AgentMode::Plan);
+
+        let (method, params) = rx.recv().await.unwrap();
+        assert_eq!(method, "session.mode.get");
+        assert_eq!(params.unwrap(), serde_json::json!({ "sessionId": "test" }));
+    }
+
+    #[tokio::test]
+    async fn test_model_switch_to_uses_session_rpc() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, move |method, params| {
+            let method = method.to_string();
+            let params_clone = params.clone();
+            let tx = tx.clone();
+            Box::pin(async move {
+                let _ = tx.send((method, params_clone));
+                Ok(serde_json::json!({ "modelId": "claude-sonnet-4.5" }))
+            })
+        });
+
+        let result = session
+            .model_switch_to("claude-sonnet-4.5", Some("high"))
+            .await
+            .unwrap();
+        assert_eq!(result.model_id.as_deref(), Some("claude-sonnet-4.5"));
+
+        let (method, params) = rx.recv().await.unwrap();
+        assert_eq!(method, "session.model.switchTo");
+        assert_eq!(
+            params.unwrap(),
+            serde_json::json!({
+                "sessionId": "test",
+                "modelId": "claude-sonnet-4.5",
+                "reasoningEffort": "high"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_log_event_uses_session_rpc() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, move |method, params| {
+            let method = method.to_string();
+            let params_clone = params.clone();
+            let tx = tx.clone();
+            Box::pin(async move {
+                let _ = tx.send((method, params_clone));
+                Ok(serde_json::json!({ "eventId": "evt-log-1" }))
+            })
+        });
+
+        let result = session
+            .log_event(
+                "switching to plan mode",
+                Some(SessionLogLevel::Warning),
+                Some(true),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.event_id, "evt-log-1");
+
+        let (method, params) = rx.recv().await.unwrap();
+        assert_eq!(method, "session.log");
+        assert_eq!(
+            params.unwrap(),
+            serde_json::json!({
+                "sessionId": "test",
+                "message": "switching to plan mode",
+                "level": "warning",
+                "ephemeral": true
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_read_uses_session_rpc() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, move |method, params| {
+            let method = method.to_string();
+            let params_clone = params.clone();
+            let tx = tx.clone();
+            Box::pin(async move {
+                let _ = tx.send((method, params_clone));
+                Ok(serde_json::json!({
+                    "exists": true,
+                    "content": "phase 1",
+                    "path": "/tmp/workspace/plan.md"
+                }))
+            })
+        });
+
+        let result = session.plan_read().await.unwrap();
+        assert!(result.exists);
+        assert_eq!(result.content.as_deref(), Some("phase 1"));
+
+        let (method, params) = rx.recv().await.unwrap();
+        assert_eq!(method, "session.plan.read");
+        assert_eq!(params.unwrap(), serde_json::json!({ "sessionId": "test" }));
+    }
+
+    #[tokio::test]
+    async fn test_workspace_create_file_uses_session_rpc() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, move |method, params| {
+            let method = method.to_string();
+            let params_clone = params.clone();
+            let tx = tx.clone();
+            Box::pin(async move {
+                let _ = tx.send((method, params_clone));
+                Ok(serde_json::json!({}))
+            })
+        });
+
+        session
+            .workspace_create_file("notes/todo.txt", "finish phase 3")
+            .await
+            .unwrap();
+
+        let (method, params) = rx.recv().await.unwrap();
+        assert_eq!(method, "session.workspace.createFile");
+        assert_eq!(
+            params.unwrap(),
+            serde_json::json!({
+                "sessionId": "test",
+                "path": "notes/todo.txt",
+                "content": "finish phase 3"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_disconnect_clears_local_handlers() {
+        let session = Session::new("test".to_string(), None, move |_method, _params| {
+            Box::pin(async move { Ok(serde_json::json!({})) })
+        });
+
+        session.register_tool(Tool::new("echo")).await;
+        session
+            .register_permission_handler(|_| PermissionRequestResult::approved())
+            .await;
+        session
+            .register_user_input_handler(|_, _| UserInputResponse {
+                answer: "ok".into(),
+                was_freeform: Some(true),
+            })
+            .await;
+        session
+            .register_hooks(crate::types::SessionHooks {
+                on_session_start: Some(Arc::new(|_| {
+                    crate::types::SessionStartHookOutput::default()
+                })),
+                ..Default::default()
+            })
+            .await;
+
+        session.disconnect().await.unwrap();
+
+        assert!(session.get_tool("echo").await.is_none());
+        assert!(!session.has_user_input_handler().await);
+        assert!(!session.has_hooks().await);
+        let denied = session
+            .handle_permission_request(&PermissionRequest {
+                kind: "shell".into(),
+                tool_call_id: None,
+                extension_data: HashMap::new(),
+            })
+            .await;
+        assert!(denied.is_denied());
+    }
+
+    #[tokio::test]
+    async fn test_agent_select_uses_session_rpc() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, move |method, params| {
+            let method = method.to_string();
+            let params_clone = params.clone();
+            let tx = tx.clone();
+            Box::pin(async move {
+                let _ = tx.send((method, params_clone));
+                Ok(serde_json::json!({
+                    "agent": {
+                        "name": "planner",
+                        "displayName": "Planner",
+                        "description": "Planning specialist"
+                    }
+                }))
+            })
+        });
+
+        let result = session.agent_select("planner").await.unwrap();
+        assert_eq!(result.name, "planner");
+
+        let (method, params) = rx.recv().await.unwrap();
+        assert_eq!(method, "session.agent.select");
+        assert_eq!(
+            params.unwrap(),
+            serde_json::json!({
+                "sessionId": "test",
+                "name": "planner"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_compaction_compact_uses_session_rpc() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, move |method, params| {
+            let method = method.to_string();
+            let params_clone = params.clone();
+            let tx = tx.clone();
+            Box::pin(async move {
+                let _ = tx.send((method, params_clone));
+                Ok(serde_json::json!({
+                    "success": true,
+                    "tokensRemoved": 1200,
+                    "messagesRemoved": 4
+                }))
+            })
+        });
+
+        let result = session.compaction_compact().await.unwrap();
+        assert!(result.success);
+        assert_eq!(result.tokens_removed, 1200);
+
+        let (method, params) = rx.recv().await.unwrap();
+        assert_eq!(method, "session.compaction.compact");
+        assert_eq!(params.unwrap(), serde_json::json!({ "sessionId": "test" }));
     }
 
     #[tokio::test]
@@ -917,10 +1757,12 @@ mod tests {
         let session = Session::new("test".to_string(), None, mock_invoke);
 
         let hooks = crate::types::SessionHooks {
-            on_pre_tool_use: Some(Arc::new(|_input| crate::types::PreToolUseHookOutput {
-                permission_decision: Some("allow".into()),
-                additional_context: Some("extra context".into()),
-                ..Default::default()
+            on_pre_tool_use: Some(Arc::new(|_input| {
+                crate::types::PreToolUseHookOutput {
+                    permission_decision: Some("allow".into()),
+                    additional_context: Some("extra context".into()),
+                    ..Default::default()
+                }
             })),
             ..Default::default()
         };
@@ -986,7 +1828,9 @@ mod tests {
         let session = Session::new("test".to_string(), None, mock_invoke);
 
         let hooks = crate::types::SessionHooks {
-            on_pre_tool_use: Some(Arc::new(|_| crate::types::PreToolUseHookOutput::default())),
+            on_pre_tool_use: Some(Arc::new(|_| {
+                crate::types::PreToolUseHookOutput::default()
+            })),
             ..Default::default()
         };
         session.register_hooks(hooks).await;

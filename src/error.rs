@@ -29,9 +29,21 @@ pub enum CopilotError {
         data: Option<serde_json::Value>,
     },
 
-    /// Protocol version mismatch
-    #[error("Protocol version mismatch: expected {expected}, got {actual}")]
-    ProtocolMismatch { expected: u32, actual: u32 },
+    /// CLI protocol version is outside the supported range.
+    #[error(
+        "Protocol version mismatch: SDK supports versions {minimum}-{maximum}, but server reports version {actual}"
+    )]
+    ProtocolMismatch {
+        minimum: u32,
+        maximum: u32,
+        actual: u32,
+    },
+
+    /// CLI did not report a protocol version during startup negotiation.
+    #[error(
+        "Protocol version mismatch: SDK supports versions {minimum}-{maximum}, but server did not report a protocol version"
+    )]
+    MissingProtocolVersion { minimum: u32, maximum: u32 },
 
     /// Protocol error (framing, invalid messages, etc.)
     #[error("Protocol error: {0}")]
@@ -120,6 +132,7 @@ impl CopilotError {
                 | CopilotError::ProcessExit(_)
                 | CopilotError::Shutdown
                 | CopilotError::ProtocolMismatch { .. }
+                | CopilotError::MissingProtocolVersion { .. }
         )
     }
 }
@@ -138,12 +151,25 @@ mod tests {
     #[test]
     fn test_error_display() {
         let err = CopilotError::ProtocolMismatch {
-            expected: 1,
-            actual: 2,
+            minimum: 2,
+            maximum: 3,
+            actual: 1,
         };
         assert_eq!(
             err.to_string(),
-            "Protocol version mismatch: expected 1, got 2"
+            "Protocol version mismatch: SDK supports versions 2-3, but server reports version 1"
+        );
+    }
+
+    #[test]
+    fn test_missing_protocol_version_display() {
+        let err = CopilotError::MissingProtocolVersion {
+            minimum: 2,
+            maximum: 3,
+        };
+        assert_eq!(
+            err.to_string(),
+            "Protocol version mismatch: SDK supports versions 2-3, but server did not report a protocol version"
         );
     }
 
@@ -151,6 +177,13 @@ mod tests {
     fn test_is_fatal() {
         assert!(CopilotError::ConnectionClosed.is_fatal());
         assert!(CopilotError::Shutdown.is_fatal());
+        assert!(
+            CopilotError::MissingProtocolVersion {
+                minimum: 2,
+                maximum: 3,
+            }
+            .is_fatal()
+        );
         assert!(!CopilotError::Timeout(Duration::from_secs(30)).is_fatal());
     }
 }

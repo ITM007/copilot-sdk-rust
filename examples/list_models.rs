@@ -52,7 +52,10 @@ async fn main() -> copilot_sdk::Result<()> {
                 }
 
                 if vision.max_prompt_images > 0 {
-                    println!("       Max images per prompt: {}", vision.max_prompt_images);
+                    println!(
+                        "       Max images per prompt: {}",
+                        vision.max_prompt_images
+                    );
                 }
 
                 if vision.max_prompt_image_size > 0 {

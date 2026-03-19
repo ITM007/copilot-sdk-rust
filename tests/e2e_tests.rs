@@ -12,14 +12,15 @@
 #![cfg(feature = "e2e")]
 
 use copilot_sdk::{
-    find_copilot_cli, Client, ConnectionState, CustomAgentConfig, ErrorOccurredHookOutput,
-    LogLevel, PermissionRequest, PermissionRequestResult, PreToolUseHookOutput,
-    ResumeSessionConfig, SessionConfig, SessionEventData, SessionHooks, SessionStartHookOutput,
-    SystemMessageConfig, SystemMessageMode, Tool, ToolResultObject,
+    Client, ConnectionState, CustomAgentConfig, ErrorOccurredHookOutput, LogLevel,
+    PermissionRequest, PermissionRequestResult, PreToolUseHookOutput,
+    ResumeSessionConfig, SessionConfig, SessionEventData, SessionHooks,
+    SessionStartHookOutput, SystemMessageConfig, SystemMessageMode, Tool,
+    ToolResultObject, find_copilot_cli,
 };
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::sync::Once;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::Duration;
 use tokio::sync::Mutex;
 
@@ -428,7 +429,8 @@ async fn test_send_message_returns_id() {
     assert!(!message_id.is_empty(), "Message ID should not be empty");
 
     // Wait for idle
-    let _ = tokio::time::timeout(Duration::from_secs(30), session.wait_for_idle(None)).await;
+    let _ =
+        tokio::time::timeout(Duration::from_secs(30), session.wait_for_idle(None)).await;
 
     client.stop().await;
 }
@@ -716,15 +718,16 @@ async fn test_multiple_tools() {
             "required": ["a", "b", "operation"]
         }));
 
-    let echo = Tool::new("echo")
-        .description("Echo a message back")
-        .schema(serde_json::json!({
-            "type": "object",
-            "properties": {
-                "message": { "type": "string", "description": "The message to echo" }
-            },
-            "required": ["message"]
-        }));
+    let echo =
+        Tool::new("echo")
+            .description("Echo a message back")
+            .schema(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "message": { "type": "string", "description": "The message to echo" }
+                },
+                "required": ["message"]
+            }));
 
     let config = SessionConfig {
         tools: vec![calculator.clone(), echo.clone()],
@@ -930,7 +933,9 @@ async fn test_system_message_replace_mode() {
     let config = SessionConfig {
         system_message: Some(SystemMessageConfig {
             mode: Some(SystemMessageMode::Replace),
-            content: Some("You are a calculator. Only respond with numbers, no words.".to_string()),
+            content: Some(
+                "You are a calculator. Only respond with numbers, no words.".to_string(),
+            ),
         }),
         ..Default::default()
     };
@@ -1019,7 +1024,8 @@ async fn test_background_event_collector() {
     // Subscribe and spawn background collector
     let mut events = session.subscribe();
     tokio::spawn(async move {
-        while let Ok(Ok(event)) = tokio::time::timeout(Duration::from_secs(30), events.recv()).await
+        while let Ok(Ok(event)) =
+            tokio::time::timeout(Duration::from_secs(30), events.recv()).await
         {
             count_clone.fetch_add(1, Ordering::SeqCst);
             if matches!(event.data, SessionEventData::SessionIdle(_)) {
@@ -1406,7 +1412,8 @@ async fn test_rapid_message_sending() {
     }
 
     // Wait for all to complete
-    let _ = tokio::time::timeout(Duration::from_secs(60), session.wait_for_idle(None)).await;
+    let _ =
+        tokio::time::timeout(Duration::from_secs(60), session.wait_for_idle(None)).await;
 
     client.stop().await;
 }
@@ -1509,7 +1516,8 @@ async fn test_full_workflow() {
     let types_clone = Arc::clone(&event_types);
 
     tokio::spawn(async move {
-        while let Ok(Ok(event)) = tokio::time::timeout(Duration::from_secs(60), events.recv()).await
+        while let Ok(Ok(event)) =
+            tokio::time::timeout(Duration::from_secs(60), events.recv()).await
         {
             types_clone
                 .lock()
@@ -2532,7 +2540,8 @@ async fn test_deny_tools_batch_builder() {
     // echo is in the allow list — should work
     let response = tokio::time::timeout(
         Duration::from_secs(60),
-        session.send_and_collect("Run 'echo BATCH_TEST_OK' and tell me the result.", None),
+        session
+            .send_and_collect("Run 'echo BATCH_TEST_OK' and tell me the result.", None),
     )
     .await
     .expect("Timeout")

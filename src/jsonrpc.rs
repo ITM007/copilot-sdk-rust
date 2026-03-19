@@ -6,17 +6,19 @@
 //! Provides bidirectional JSON-RPC communication over any transport.
 
 use crate::error::{CopilotError, Result};
-use crate::transport::{MessageFramer, MessageReader, MessageWriter, StdioTransport, Transport};
+use crate::transport::{
+    MessageFramer, MessageReader, MessageWriter, StdioTransport, Transport,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 
 // =============================================================================
 // JSON-RPC 2.0 Message Types
@@ -61,7 +63,11 @@ pub struct JsonRpcRequest {
 
 impl JsonRpcRequest {
     /// Create a new request.
-    pub fn new(method: impl Into<String>, params: Option<Value>, id: Option<JsonRpcId>) -> Self {
+    pub fn new(
+        method: impl Into<String>,
+        params: Option<Value>,
+        id: Option<JsonRpcId>,
+    ) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
             method: method.into(),
@@ -164,8 +170,11 @@ impl JsonRpcResponse {
 pub type NotificationHandler = Arc<dyn Fn(&str, &Value) + Send + Sync>;
 
 /// Future returned by async request handlers.
-pub type RequestHandlerFuture =
-    Pin<Box<dyn std::future::Future<Output = std::result::Result<Value, JsonRpcError>> + Send>>;
+pub type RequestHandlerFuture = Pin<
+    Box<
+        dyn std::future::Future<Output = std::result::Result<Value, JsonRpcError>> + Send,
+    >,
+>;
 
 /// Handler for incoming requests (returns result or error).
 pub type RequestHandler = Arc<dyn Fn(&str, &Value) -> RequestHandlerFuture + Send + Sync>;
@@ -388,7 +397,11 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
     }
 
     /// Send an error response to an incoming request.
-    pub async fn send_error_response(&self, id: JsonRpcId, error: JsonRpcError) -> Result<()> {
+    pub async fn send_error_response(
+        &self,
+        id: JsonRpcId,
+        error: JsonRpcError,
+    ) -> Result<()> {
         let response = JsonRpcResponse::error(id, error);
         let response_json = serde_json::to_string(&response)?;
         self.send_raw(&response_json).await
@@ -543,7 +556,9 @@ impl StdioJsonRpcClient {
     /// Start the background read loop.
     pub async fn start(&self) -> Result<()> {
         let reader = self.reader.lock().await.take().ok_or_else(|| {
-            CopilotError::InvalidConfig("Reader already taken or client already started".into())
+            CopilotError::InvalidConfig(
+                "Reader already taken or client already started".into(),
+            )
         })?;
         self.start_with_reader(reader).await
     }
@@ -857,12 +872,17 @@ impl TcpJsonRpcClient {
     /// Start the background read loop.
     pub async fn start(&self) -> Result<()> {
         let reader = self.reader.lock().await.take().ok_or_else(|| {
-            CopilotError::InvalidConfig("Reader already taken or client already started".into())
+            CopilotError::InvalidConfig(
+                "Reader already taken or client already started".into(),
+            )
         })?;
         self.start_with_reader(reader).await
     }
 
-    async fn start_with_reader(&self, mut reader: MessageReader<OwnedReadHalf>) -> Result<()> {
+    async fn start_with_reader(
+        &self,
+        mut reader: MessageReader<OwnedReadHalf>,
+    ) -> Result<()> {
         if self.state.running.swap(true, Ordering::SeqCst) {
             return Ok(()); // Already running
         }
@@ -1115,7 +1135,8 @@ mod tests {
 
     #[test]
     fn test_json_rpc_notification_serialization() {
-        let request = JsonRpcRequest::notification("notify_method", Some(json!([1, 2, 3])));
+        let request =
+            JsonRpcRequest::notification("notify_method", Some(json!([1, 2, 3])));
 
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["jsonrpc"], "2.0");
@@ -1125,7 +1146,8 @@ mod tests {
 
     #[test]
     fn test_json_rpc_response_success() {
-        let response = JsonRpcResponse::success(JsonRpcId::Num(1), json!({"result": "ok"}));
+        let response =
+            JsonRpcResponse::success(JsonRpcId::Num(1), json!({"result": "ok"}));
 
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["jsonrpc"], "2.0");
@@ -1182,8 +1204,7 @@ mod tests {
     async fn test_large_payload_64kb_boundary() {
         // Create a payload near 64KB (65536 bytes)
         let large_data = "x".repeat(65536 - 50); // account for JSON wrapper
-        let msg =
-            serde_json::json!({"jsonrpc": "2.0", "method": "test", "params": {"data": large_data}});
+        let msg = serde_json::json!({"jsonrpc": "2.0", "method": "test", "params": {"data": large_data}});
         let msg_str = serde_json::to_string(&msg).unwrap();
 
         // Write with framer
@@ -1202,8 +1223,7 @@ mod tests {
     #[tokio::test]
     async fn test_large_payload_100kb() {
         let large_data = "y".repeat(100_000);
-        let msg =
-            serde_json::json!({"jsonrpc": "2.0", "method": "test", "params": {"data": large_data}});
+        let msg = serde_json::json!({"jsonrpc": "2.0", "method": "test", "params": {"data": large_data}});
         let msg_str = serde_json::to_string(&msg).unwrap();
 
         let transport = MemoryTransport::new(Vec::new());

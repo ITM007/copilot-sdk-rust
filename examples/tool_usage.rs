@@ -8,7 +8,9 @@
 //! - Register tool handlers
 //! - Have the assistant use your tools
 
-use copilot_sdk::{Client, SessionConfig, SessionEventData, Tool, ToolHandler, ToolResultObject};
+use copilot_sdk::{
+    Client, SessionConfig, SessionEventData, Tool, ToolHandler, ToolResultObject,
+};
 use std::sync::Arc;
 
 #[cfg(feature = "schemars")]

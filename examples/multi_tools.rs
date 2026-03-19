@@ -3,7 +3,9 @@
 
 //! Multi-tools example demonstrating multiple custom tools.
 
-use copilot_sdk::{Client, SessionConfig, SessionEventData, Tool, ToolHandler, ToolResultObject};
+use copilot_sdk::{
+    Client, SessionConfig, SessionEventData, Tool, ToolHandler, ToolResultObject,
+};
 use std::io::{self, Write};
 use std::sync::Arc;
 
@@ -27,13 +29,14 @@ async fn main() -> copilot_sdk::Result<()> {
             "required": ["a", "b", "op"]
         }));
 
-    let echo = Tool::new("echo")
-        .description("Echo a message")
-        .schema(serde_json::json!({
-            "type": "object",
-            "properties": {"message": {"type": "string"}},
-            "required": ["message"]
-        }));
+    let echo =
+        Tool::new("echo")
+            .description("Echo a message")
+            .schema(serde_json::json!({
+                "type": "object",
+                "properties": {"message": {"type": "string"}},
+                "required": ["message"]
+            }));
 
     let random = Tool::new("random")
         .description("Generate random number")

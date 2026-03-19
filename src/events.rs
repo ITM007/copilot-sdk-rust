@@ -541,6 +541,131 @@ pub struct ToolExecutionProgressData {
     pub progress_message: String,
 }
 
+/// Data for permission.requested event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequestedData {
+    pub request_id: String,
+    pub permission_request: super::PermissionRequest,
+}
+
+/// Data for permission.completed event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionCompletedData {
+    pub request_id: String,
+    pub result: super::PermissionRequestResult,
+}
+
+/// Data for user_input.requested event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInputRequestedData {
+    pub request_id: String,
+    #[serde(flatten)]
+    pub request: super::UserInputRequest,
+}
+
+/// Data for user_input.completed event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInputCompletedData {
+    pub request_id: String,
+}
+
+/// Elicitation mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ElicitationMode {
+    Form,
+}
+
+/// Requested schema for an elicitation form.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ElicitationRequestedSchema {
+    #[serde(rename = "type")]
+    pub schema_type: String,
+    pub properties: HashMap<String, serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<Vec<String>>,
+}
+
+/// Data for elicitation.requested event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationRequestedData {
+    pub request_id: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ElicitationMode>,
+    pub requested_schema: ElicitationRequestedSchema,
+    #[serde(flatten)]
+    pub extension_data: HashMap<String, serde_json::Value>,
+}
+
+/// Data for elicitation.completed event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationCompletedData {
+    pub request_id: String,
+}
+
+/// Data for external_tool.requested event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalToolRequestedData {
+    pub request_id: String,
+    pub session_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traceparent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracestate: Option<String>,
+}
+
+/// Data for external_tool.completed event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalToolCompletedData {
+    pub request_id: String,
+}
+
+/// Data for command.queued event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandQueuedData {
+    pub request_id: String,
+    pub command: String,
+}
+
+/// Data for command.completed event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandCompletedData {
+    pub request_id: String,
+}
+
+/// Data for exit_plan_mode.requested event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExitPlanModeRequestedData {
+    pub request_id: String,
+    pub summary: String,
+    pub plan_content: String,
+    pub actions: Vec<String>,
+    pub recommended_action: String,
+}
+
+/// Data for exit_plan_mode.completed event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExitPlanModeCompletedData {
+    pub request_id: String,
+}
+
 /// Data for skill.invoked event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -584,6 +709,18 @@ pub enum SessionEventData {
     ToolExecutionPartialResult(ToolExecutionPartialResultData),
     ToolExecutionComplete(ToolExecutionCompleteData),
     ToolExecutionProgress(ToolExecutionProgressData),
+    PermissionRequested(PermissionRequestedData),
+    PermissionCompleted(PermissionCompletedData),
+    UserInputRequested(UserInputRequestedData),
+    UserInputCompleted(UserInputCompletedData),
+    ElicitationRequested(ElicitationRequestedData),
+    ElicitationCompleted(ElicitationCompletedData),
+    ExternalToolRequested(ExternalToolRequestedData),
+    ExternalToolCompleted(ExternalToolCompletedData),
+    CommandQueued(CommandQueuedData),
+    CommandCompleted(CommandCompletedData),
+    ExitPlanModeRequested(ExitPlanModeRequestedData),
+    ExitPlanModeCompleted(ExitPlanModeCompletedData),
     CustomAgentStarted(CustomAgentStartedData),
     CustomAgentCompleted(CustomAgentCompletedData),
     CustomAgentFailed(CustomAgentFailedData),
@@ -807,6 +944,42 @@ fn parse_event_data(event_type: &str, data: serde_json::Value) -> SessionEventDa
         "tool.execution_progress" => serde_json::from_value(data)
             .map(SessionEventData::ToolExecutionProgress)
             .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
+        "permission.requested" => serde_json::from_value(data)
+            .map(SessionEventData::PermissionRequested)
+            .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
+        "permission.completed" => serde_json::from_value(data)
+            .map(SessionEventData::PermissionCompleted)
+            .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
+        "user_input.requested" => serde_json::from_value(data)
+            .map(SessionEventData::UserInputRequested)
+            .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
+        "user_input.completed" => serde_json::from_value(data)
+            .map(SessionEventData::UserInputCompleted)
+            .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
+        "elicitation.requested" => serde_json::from_value(data)
+            .map(SessionEventData::ElicitationRequested)
+            .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
+        "elicitation.completed" => serde_json::from_value(data)
+            .map(SessionEventData::ElicitationCompleted)
+            .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
+        "external_tool.requested" => serde_json::from_value(data)
+            .map(SessionEventData::ExternalToolRequested)
+            .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
+        "external_tool.completed" => serde_json::from_value(data)
+            .map(SessionEventData::ExternalToolCompleted)
+            .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
+        "command.queued" => serde_json::from_value(data)
+            .map(SessionEventData::CommandQueued)
+            .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
+        "command.completed" => serde_json::from_value(data)
+            .map(SessionEventData::CommandCompleted)
+            .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
+        "exit_plan_mode.requested" => serde_json::from_value(data)
+            .map(SessionEventData::ExitPlanModeRequested)
+            .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
+        "exit_plan_mode.completed" => serde_json::from_value(data)
+            .map(SessionEventData::ExitPlanModeCompleted)
+            .unwrap_or_else(|_| SessionEventData::Unknown(serde_json::Value::Null)),
         // Primary wire names (subagent.*) + legacy aliases (custom_agent.*)
         "subagent.started" | "custom_agent.started" => serde_json::from_value(data)
             .map(SessionEventData::CustomAgentStarted)
@@ -856,6 +1029,14 @@ fn parse_event_data(event_type: &str, data: serde_json::Value) -> SessionEventDa
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn assert_data_roundtrip<T>(value: serde_json::Value)
+    where
+        T: serde::de::DeserializeOwned + Serialize,
+    {
+        let parsed: T = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+    }
 
     #[test]
     fn test_parse_assistant_message() {
@@ -1207,6 +1388,414 @@ mod tests {
         } else {
             panic!("Expected ToolExecutionProgress");
         }
+    }
+
+    #[test]
+    fn test_parse_permission_requested_roundtrip() {
+        let json = json!({
+            "id": "evt_perm_requested",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "type": "permission.requested",
+            "data": {
+                "requestId": "perm-1",
+                "permissionRequest": {
+                    "kind": "shell",
+                    "toolCallId": "call-1",
+                    "fullCommandText": "ls -la",
+                    "intention": "List files",
+                    "commands": [
+                        {
+                            "identifier": "ls",
+                            "readOnly": true
+                        }
+                    ],
+                    "possiblePaths": ["/tmp"],
+                    "possibleUrls": [
+                        {
+                            "url": "https://example.com"
+                        }
+                    ],
+                    "hasWriteFileRedirection": false,
+                    "canOfferSessionApproval": true,
+                    "warning": "Lists directory contents"
+                }
+            }
+        });
+
+        let event = SessionEvent::from_json(&json).unwrap();
+        if let SessionEventData::PermissionRequested(data) = &event.data {
+            assert_eq!(data.request_id, "perm-1");
+            assert_eq!(data.permission_request.kind, "shell");
+            assert_eq!(
+                data.permission_request.tool_call_id.as_deref(),
+                Some("call-1")
+            );
+            assert_eq!(
+                data.permission_request
+                    .extension_data
+                    .get("fullCommandText")
+                    .and_then(|value| value.as_str()),
+                Some("ls -la")
+            );
+        } else {
+            panic!("Expected PermissionRequested");
+        }
+
+        assert_data_roundtrip::<PermissionRequestedData>(json["data"].clone());
+    }
+
+    #[test]
+    fn test_parse_permission_completed_roundtrip() {
+        let json = json!({
+            "id": "evt_perm_completed",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "type": "permission.completed",
+            "data": {
+                "requestId": "perm-1",
+                "result": {
+                    "kind": "approved"
+                }
+            }
+        });
+
+        let event = SessionEvent::from_json(&json).unwrap();
+        if let SessionEventData::PermissionCompleted(data) = &event.data {
+            assert_eq!(data.request_id, "perm-1");
+            assert!(data.result.is_approved());
+        } else {
+            panic!("Expected PermissionCompleted");
+        }
+
+        assert_data_roundtrip::<PermissionCompletedData>(json["data"].clone());
+    }
+
+    #[test]
+    fn test_parse_request_lifecycle_events() {
+        let cases = vec![
+            (
+                json!({
+                    "id": "evt_user_input_requested",
+                    "timestamp": "2025-01-01T00:00:00Z",
+                    "type": "user_input.requested",
+                    "data": {
+                        "requestId": "input-1",
+                        "question": "Choose a mode",
+                        "choices": ["safe", "fast"],
+                        "allowFreeform": true
+                    }
+                }),
+                "user_input.requested",
+            ),
+            (
+                json!({
+                    "id": "evt_user_input_completed",
+                    "timestamp": "2025-01-01T00:00:00Z",
+                    "type": "user_input.completed",
+                    "data": {
+                        "requestId": "input-1"
+                    }
+                }),
+                "user_input.completed",
+            ),
+            (
+                json!({
+                    "id": "evt_elicitation_requested",
+                    "timestamp": "2025-01-01T00:00:00Z",
+                    "type": "elicitation.requested",
+                    "data": {
+                        "requestId": "elicitation-1",
+                        "message": "Tell me about the deployment target.",
+                        "mode": "form",
+                        "requestedSchema": {
+                            "type": "object",
+                            "properties": {
+                                "environment": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": ["environment"]
+                        },
+                        "title": "Deployment target"
+                    }
+                }),
+                "elicitation.requested",
+            ),
+            (
+                json!({
+                    "id": "evt_elicitation_completed",
+                    "timestamp": "2025-01-01T00:00:00Z",
+                    "type": "elicitation.completed",
+                    "data": {
+                        "requestId": "elicitation-1"
+                    }
+                }),
+                "elicitation.completed",
+            ),
+            (
+                json!({
+                    "id": "evt_command_queued",
+                    "timestamp": "2025-01-01T00:00:00Z",
+                    "type": "command.queued",
+                    "data": {
+                        "requestId": "command-1",
+                        "command": "/help"
+                    }
+                }),
+                "command.queued",
+            ),
+            (
+                json!({
+                    "id": "evt_command_completed",
+                    "timestamp": "2025-01-01T00:00:00Z",
+                    "type": "command.completed",
+                    "data": {
+                        "requestId": "command-1"
+                    }
+                }),
+                "command.completed",
+            ),
+            (
+                json!({
+                    "id": "evt_exit_plan_requested",
+                    "timestamp": "2025-01-01T00:00:00Z",
+                    "type": "exit_plan_mode.requested",
+                    "data": {
+                        "requestId": "plan-1",
+                        "summary": "Implement the requested event types.",
+                        "planContent": "1. Add event structs\n2. Add parsing\n3. Add tests",
+                        "actions": ["approve", "edit", "reject"],
+                        "recommendedAction": "approve"
+                    }
+                }),
+                "exit_plan_mode.requested",
+            ),
+            (
+                json!({
+                    "id": "evt_exit_plan_completed",
+                    "timestamp": "2025-01-01T00:00:00Z",
+                    "type": "exit_plan_mode.completed",
+                    "data": {
+                        "requestId": "plan-1"
+                    }
+                }),
+                "exit_plan_mode.completed",
+            ),
+        ];
+
+        for (json, event_type) in &cases {
+            let event = SessionEvent::from_json(json).unwrap();
+            assert_eq!(event.event_type, *event_type);
+            assert!(
+                !matches!(event.data, SessionEventData::Unknown(_)),
+                "Expected {event_type} to parse into a typed variant"
+            );
+        }
+
+        assert_data_roundtrip::<UserInputRequestedData>(cases[0].0["data"].clone());
+        assert_data_roundtrip::<ElicitationRequestedData>(cases[2].0["data"].clone());
+        assert_data_roundtrip::<CommandQueuedData>(cases[4].0["data"].clone());
+        assert_data_roundtrip::<ExitPlanModeRequestedData>(cases[6].0["data"].clone());
+    }
+
+    #[test]
+    fn test_parse_request_lifecycle_event_fields() {
+        let user_input = SessionEvent::from_json(&json!({
+            "id": "evt_user_input_requested_fields",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "type": "user_input.requested",
+            "data": {
+                "requestId": "input-2",
+                "question": "Choose a mode",
+                "choices": ["safe", "fast"],
+                "allowFreeform": true
+            }
+        }))
+        .unwrap();
+        if let SessionEventData::UserInputRequested(data) = &user_input.data {
+            assert_eq!(data.request_id, "input-2");
+            assert_eq!(data.request.question, "Choose a mode");
+            assert_eq!(
+                data.request.choices.as_ref().unwrap(),
+                &vec!["safe".to_string(), "fast".to_string()]
+            );
+            assert_eq!(data.request.allow_freeform, Some(true));
+        } else {
+            panic!("Expected UserInputRequested");
+        }
+
+        let elicitation = SessionEvent::from_json(&json!({
+            "id": "evt_elicitation_requested_fields",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "type": "elicitation.requested",
+            "data": {
+                "requestId": "elicitation-2",
+                "message": "Tell me about the deployment target.",
+                "mode": "form",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "environment": {
+                            "type": "string"
+                        }
+                    },
+                    "required": ["environment"]
+                },
+                "title": "Deployment target"
+            }
+        }))
+        .unwrap();
+        if let SessionEventData::ElicitationRequested(data) = &elicitation.data {
+            assert_eq!(data.request_id, "elicitation-2");
+            assert_eq!(data.message, "Tell me about the deployment target.");
+            assert_eq!(data.mode, Some(ElicitationMode::Form));
+            assert_eq!(data.requested_schema.schema_type, "object");
+            assert_eq!(
+                data.requested_schema.required.as_ref().unwrap(),
+                &vec!["environment".to_string()]
+            );
+            assert_eq!(
+                data.extension_data
+                    .get("title")
+                    .and_then(|value| value.as_str()),
+                Some("Deployment target")
+            );
+        } else {
+            panic!("Expected ElicitationRequested");
+        }
+
+        let command = SessionEvent::from_json(&json!({
+            "id": "evt_command_queued_fields",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "type": "command.queued",
+            "data": {
+                "requestId": "command-2",
+                "command": "/help"
+            }
+        }))
+        .unwrap();
+        if let SessionEventData::CommandQueued(data) = &command.data {
+            assert_eq!(data.request_id, "command-2");
+            assert_eq!(data.command, "/help");
+        } else {
+            panic!("Expected CommandQueued");
+        }
+
+        let exit_plan = SessionEvent::from_json(&json!({
+            "id": "evt_exit_plan_requested_fields",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "type": "exit_plan_mode.requested",
+            "data": {
+                "requestId": "plan-2",
+                "summary": "Implement the requested event types.",
+                "planContent": "1. Add event structs\n2. Add parsing\n3. Add tests",
+                "actions": ["approve", "edit", "reject"],
+                "recommendedAction": "approve"
+            }
+        }))
+        .unwrap();
+        if let SessionEventData::ExitPlanModeRequested(data) = &exit_plan.data {
+            assert_eq!(data.request_id, "plan-2");
+            assert_eq!(data.summary, "Implement the requested event types.");
+            assert_eq!(data.actions, vec!["approve", "edit", "reject"]);
+            assert_eq!(data.recommended_action, "approve");
+        } else {
+            panic!("Expected ExitPlanModeRequested");
+        }
+    }
+
+    #[test]
+    fn test_parse_external_tool_requested_roundtrip() {
+        let json = json!({
+            "id": "evt_external_tool_requested",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "type": "external_tool.requested",
+            "data": {
+                "requestId": "ext-1",
+                "sessionId": "session-1",
+                "toolCallId": "call-99",
+                "toolName": "browser-search",
+                "arguments": {
+                    "query": "copilot protocol v3"
+                },
+                "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00",
+                "tracestate": "vendor=value"
+            }
+        });
+
+        let event = SessionEvent::from_json(&json).unwrap();
+        if let SessionEventData::ExternalToolRequested(data) = &event.data {
+            assert_eq!(data.request_id, "ext-1");
+            assert_eq!(data.session_id, "session-1");
+            assert_eq!(data.tool_call_id, "call-99");
+            assert_eq!(data.tool_name, "browser-search");
+            assert_eq!(
+                data.arguments
+                    .as_ref()
+                    .and_then(|value| value.get("query"))
+                    .and_then(|value| value.as_str()),
+                Some("copilot protocol v3")
+            );
+            assert_eq!(
+                data.traceparent.as_deref(),
+                Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00")
+            );
+            assert_eq!(data.tracestate.as_deref(), Some("vendor=value"));
+        } else {
+            panic!("Expected ExternalToolRequested");
+        }
+
+        assert_data_roundtrip::<ExternalToolRequestedData>(json["data"].clone());
+    }
+
+    #[test]
+    fn test_parse_external_tool_requested_without_optional_fields() {
+        let json = json!({
+            "id": "evt_external_tool_requested_minimal",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "type": "external_tool.requested",
+            "data": {
+                "requestId": "ext-2",
+                "sessionId": "session-2",
+                "toolCallId": "call-100",
+                "toolName": "browser-search"
+            }
+        });
+
+        let event = SessionEvent::from_json(&json).unwrap();
+        if let SessionEventData::ExternalToolRequested(data) = &event.data {
+            assert_eq!(data.request_id, "ext-2");
+            assert_eq!(data.session_id, "session-2");
+            assert_eq!(data.tool_call_id, "call-100");
+            assert_eq!(data.tool_name, "browser-search");
+            assert!(data.arguments.is_none());
+            assert!(data.traceparent.is_none());
+            assert!(data.tracestate.is_none());
+        } else {
+            panic!("Expected ExternalToolRequested");
+        }
+
+        assert_data_roundtrip::<ExternalToolRequestedData>(json["data"].clone());
+    }
+
+    #[test]
+    fn test_parse_external_tool_completed_roundtrip() {
+        let json = json!({
+            "id": "evt_external_tool_completed",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "type": "external_tool.completed",
+            "data": {
+                "requestId": "ext-1"
+            }
+        });
+
+        let event = SessionEvent::from_json(&json).unwrap();
+        if let SessionEventData::ExternalToolCompleted(data) = &event.data {
+            assert_eq!(data.request_id, "ext-1");
+        } else {
+            panic!("Expected ExternalToolCompleted");
+        }
+
+        assert_data_roundtrip::<ExternalToolCompletedData>(json["data"].clone());
     }
 
     #[test]

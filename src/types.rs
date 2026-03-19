@@ -16,8 +16,15 @@ fn is_false(value: &bool) -> bool {
 // Protocol Version
 // =============================================================================
 
-/// SDK protocol version - must match copilot-agent-runtime server.
-pub const SDK_PROTOCOL_VERSION: u32 = 2;
+/// Minimum CLI protocol version accepted during startup negotiation.
+pub const MIN_PROTOCOL_VERSION: u32 = 2;
+
+include!(concat!(env!("OUT_DIR"), "/sdk_protocol_version.rs"));
+
+/// Returns true when a CLI protocol version is compatible with this SDK.
+pub const fn is_supported_protocol_version(version: u32) -> bool {
+    version >= MIN_PROTOCOL_VERSION && version <= SDK_PROTOCOL_VERSION
+}
 
 // =============================================================================
 // Enums
@@ -73,6 +80,24 @@ impl std::fmt::Display for LogLevel {
             LogLevel::All => write!(f, "all"),
         }
     }
+}
+
+/// Session agent mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentMode {
+    Interactive,
+    Plan,
+    Autopilot,
+}
+
+/// Session log severity level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionLogLevel {
+    Info,
+    Warning,
+    Error,
 }
 
 // =============================================================================
@@ -155,14 +180,13 @@ pub struct ToolInvocation {
 impl ToolInvocation {
     /// Get an argument by name, deserializing to the specified type.
     pub fn arg<T: serde::de::DeserializeOwned>(&self, name: &str) -> crate::Result<T> {
-        let args = self
-            .arguments
-            .as_ref()
-            .ok_or_else(|| crate::CopilotError::ToolError("No arguments provided".into()))?;
+        let args = self.arguments.as_ref().ok_or_else(|| {
+            crate::CopilotError::ToolError("No arguments provided".into())
+        })?;
 
-        let value = args
-            .get(name)
-            .ok_or_else(|| crate::CopilotError::ToolError(format!("Missing argument: {}", name)))?;
+        let value = args.get(name).ok_or_else(|| {
+            crate::CopilotError::ToolError(format!("Missing argument: {}", name))
+        })?;
 
         serde_json::from_value(value.clone()).map_err(|e| {
             crate::CopilotError::ToolError(format!("Invalid argument '{}': {}", name, e))
@@ -737,14 +761,17 @@ pub struct ErrorOccurredHookOutput {
 }
 
 /// Handler types for session hooks.
-pub type PreToolUseHandler = Arc<dyn Fn(PreToolUseHookInput) -> PreToolUseHookOutput + Send + Sync>;
+pub type PreToolUseHandler =
+    Arc<dyn Fn(PreToolUseHookInput) -> PreToolUseHookOutput + Send + Sync>;
 pub type PostToolUseHandler =
     Arc<dyn Fn(PostToolUseHookInput) -> PostToolUseHookOutput + Send + Sync>;
-pub type UserPromptSubmittedHandler =
-    Arc<dyn Fn(UserPromptSubmittedHookInput) -> UserPromptSubmittedHookOutput + Send + Sync>;
+pub type UserPromptSubmittedHandler = Arc<
+    dyn Fn(UserPromptSubmittedHookInput) -> UserPromptSubmittedHookOutput + Send + Sync,
+>;
 pub type SessionStartHandler =
     Arc<dyn Fn(SessionStartHookInput) -> SessionStartHookOutput + Send + Sync>;
-pub type SessionEndHandler = Arc<dyn Fn(SessionEndHookInput) -> SessionEndHookOutput + Send + Sync>;
+pub type SessionEndHandler =
+    Arc<dyn Fn(SessionEndHookInput) -> SessionEndHookOutput + Send + Sync>;
 pub type ErrorOccurredHandler =
     Arc<dyn Fn(ErrorOccurredHookInput) -> ErrorOccurredHookOutput + Send + Sync>;
 
@@ -1138,6 +1165,117 @@ pub struct ModelInfo {
     pub default_reasoning_effort: Option<String>,
 }
 
+/// Response from `session.model.getCurrent`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModelGetCurrentResult {
+    #[serde(default)]
+    pub model_id: Option<String>,
+}
+
+/// Response from `session.model.switchTo`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModelSwitchToResult {
+    #[serde(default)]
+    pub model_id: Option<String>,
+}
+
+/// Response from `session.mode.get`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModeGetResult {
+    pub mode: AgentMode,
+}
+
+/// Response from `session.mode.set`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModeSetResult {
+    pub mode: AgentMode,
+}
+
+/// Response from `session.log`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLogResult {
+    pub event_id: String,
+}
+
+/// Response from `session.plan.read`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPlanReadResult {
+    pub exists: bool,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// Response from `session.workspace.listFiles`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionWorkspaceListFilesResult {
+    #[serde(default)]
+    pub files: Vec<String>,
+}
+
+/// Response from `session.workspace.readFile`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionWorkspaceReadFileResult {
+    pub content: String,
+}
+
+/// Summary of a custom agent available to a session.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAgentInfo {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+}
+
+/// Response from `session.agent.list`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAgentListResult {
+    #[serde(default)]
+    pub agents: Vec<SessionAgentInfo>,
+}
+
+/// Response from `session.agent.getCurrent`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAgentGetCurrentResult {
+    #[serde(default)]
+    pub agent: Option<SessionAgentInfo>,
+}
+
+/// Response from `session.agent.select`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAgentSelectResult {
+    pub agent: SessionAgentInfo,
+}
+
+/// Response from `session.fleet.start`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionFleetStartResult {
+    pub started: bool,
+}
+
+/// Response from `session.compaction.compact`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionCompactionCompactResult {
+    pub success: bool,
+    pub tokens_removed: u32,
+    pub messages_removed: u32,
+}
+
 // =============================================================================
 // Selection Attachment Types
 // =============================================================================
@@ -1323,10 +1461,13 @@ mod tests {
             session_id: Some("sess-1".into()),
             model: Some("gpt-4.1".into()),
             config_dir: Some(PathBuf::from("/tmp/copilot")),
+            available_tools: Some(vec!["read_file".into(), "glob".into()]),
+            excluded_tools: Some(vec!["bash".into()]),
             streaming: true,
             skill_directories: Some(vec!["skills".into()]),
             disabled_skills: Some(vec!["legacy_skill".into()]),
             request_permission: Some(true),
+            request_user_input: Some(true),
             ..Default::default()
         };
 
@@ -1334,10 +1475,59 @@ mod tests {
         assert_eq!(value["sessionId"], "sess-1");
         assert_eq!(value["model"], "gpt-4.1");
         assert_eq!(value["configDir"], "/tmp/copilot");
+        assert_eq!(value["availableTools"][0], "read_file");
+        assert_eq!(value["availableTools"][1], "glob");
+        assert_eq!(value["excludedTools"][0], "bash");
         assert_eq!(value["streaming"], true);
         assert_eq!(value["skillDirectories"][0], "skills");
         assert_eq!(value["disabledSkills"][0], "legacy_skill");
         assert_eq!(value["requestPermission"], true);
+        assert_eq!(value["requestUserInput"], true);
+    }
+
+    #[test]
+    fn test_resume_session_config_serialization_with_phase1_fields() {
+        let config = ResumeSessionConfig {
+            model: Some("gpt-4.1".into()),
+            streaming: true,
+            skill_directories: Some(vec!["skills".into()]),
+            disabled_skills: Some(vec!["legacy_skill".into()]),
+            request_permission: Some(true),
+            request_user_input: Some(true),
+            working_directory: Some("/workspace/project".into()),
+            disable_resume: true,
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["model"], "gpt-4.1");
+        assert_eq!(value["streaming"], true);
+        assert_eq!(value["skillDirectories"][0], "skills");
+        assert_eq!(value["disabledSkills"][0], "legacy_skill");
+        assert_eq!(value["requestPermission"], true);
+        assert_eq!(value["requestUserInput"], true);
+        assert_eq!(value["workingDirectory"], "/workspace/project");
+        assert_eq!(value["disableResume"], true);
+    }
+
+    #[test]
+    fn test_protocol_version_support_range() {
+        assert!(is_supported_protocol_version(MIN_PROTOCOL_VERSION));
+        assert!(is_supported_protocol_version(SDK_PROTOCOL_VERSION));
+        assert!(!is_supported_protocol_version(MIN_PROTOCOL_VERSION - 1));
+        assert!(!is_supported_protocol_version(SDK_PROTOCOL_VERSION + 1));
+    }
+
+    #[test]
+    fn test_sdk_protocol_version_matches_source_of_truth_file() {
+        let value: serde_json::Value =
+            serde_json::from_str(include_str!("../sdk-protocol-version.json"))
+                .expect("parse sdk-protocol-version.json");
+
+        assert_eq!(
+            value.get("version").and_then(|version| version.as_u64()),
+            Some(u64::from(SDK_PROTOCOL_VERSION))
+        );
     }
 
     #[test]
@@ -1460,6 +1650,92 @@ mod tests {
         let j = serde_json::json!("selection");
         let at: AttachmentType = serde_json::from_value(j).unwrap();
         assert_eq!(at, AttachmentType::Selection);
+    }
+
+    #[test]
+    fn test_agent_mode_serde() {
+        let mode: AgentMode = serde_json::from_value(serde_json::json!("plan")).unwrap();
+        assert_eq!(mode, AgentMode::Plan);
+        assert_eq!(
+            serde_json::to_value(mode).unwrap(),
+            serde_json::json!("plan")
+        );
+    }
+
+    #[test]
+    fn test_session_log_level_serde() {
+        let level: SessionLogLevel =
+            serde_json::from_value(serde_json::json!("warning")).unwrap();
+        assert_eq!(level, SessionLogLevel::Warning);
+        assert_eq!(
+            serde_json::to_value(level).unwrap(),
+            serde_json::json!("warning")
+        );
+    }
+
+    #[test]
+    fn test_session_model_get_current_result_deserialize() {
+        let result: SessionModelGetCurrentResult =
+            serde_json::from_value(serde_json::json!({"modelId": "gpt-5"})).unwrap();
+        assert_eq!(result.model_id.as_deref(), Some("gpt-5"));
+    }
+
+    #[test]
+    fn test_session_mode_set_result_deserialize() {
+        let result: SessionModeSetResult =
+            serde_json::from_value(serde_json::json!({"mode": "autopilot"})).unwrap();
+        assert_eq!(result.mode, AgentMode::Autopilot);
+    }
+
+    #[test]
+    fn test_session_plan_read_result_deserialize() {
+        let result: SessionPlanReadResult = serde_json::from_value(serde_json::json!({
+            "exists": true,
+            "content": "plan",
+            "path": "/tmp/workspace/plan.md"
+        }))
+        .unwrap();
+        assert!(result.exists);
+        assert_eq!(result.content.as_deref(), Some("plan"));
+        assert_eq!(result.path.as_deref(), Some("/tmp/workspace/plan.md"));
+    }
+
+    #[test]
+    fn test_session_workspace_list_files_result_deserialize() {
+        let result: SessionWorkspaceListFilesResult =
+            serde_json::from_value(serde_json::json!({"files": ["notes.txt"]})).unwrap();
+        assert_eq!(result.files, vec!["notes.txt"]);
+    }
+
+    #[test]
+    fn test_session_agent_get_current_result_deserialize() {
+        let result: SessionAgentGetCurrentResult =
+            serde_json::from_value(serde_json::json!({
+                "agent": {
+                    "name": "planner",
+                    "displayName": "Planner",
+                    "description": "Planning specialist"
+                }
+            }))
+            .unwrap();
+        assert_eq!(
+            result.agent.as_ref().map(|agent| agent.name.as_str()),
+            Some("planner")
+        );
+    }
+
+    #[test]
+    fn test_session_compaction_compact_result_deserialize() {
+        let result: SessionCompactionCompactResult =
+            serde_json::from_value(serde_json::json!({
+                "success": true,
+                "tokensRemoved": 1200,
+                "messagesRemoved": 4
+            }))
+            .unwrap();
+        assert!(result.success);
+        assert_eq!(result.tokens_removed, 1200);
+        assert_eq!(result.messages_removed, 4);
     }
 
     #[test]

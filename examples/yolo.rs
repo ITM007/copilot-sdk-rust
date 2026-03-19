@@ -12,7 +12,8 @@
 //! Use with caution in production environments.
 
 use copilot_sdk::{
-    Client, PermissionRequestResult, SessionConfig, SystemMessageConfig, SystemMessageMode,
+    Client, PermissionRequestResult, SessionConfig, SystemMessageConfig,
+    SystemMessageMode,
 };
 
 #[tokio::main]

@@ -51,9 +51,8 @@ pub use tools::define_tool;
 // Re-export main types at crate root for convenience
 pub use error::{CopilotError, Result};
 pub use types::{
-    // Session lifecycle event type constants
-    session_lifecycle_event_types,
     // Enums
+    AgentMode,
     AttachmentType,
     // Config types
     AzureOptions,
@@ -70,6 +69,8 @@ pub use types::{
     GetStatusResponse,
     InfiniteSessionConfig,
     LogLevel,
+    // Constants
+    MIN_PROTOCOL_VERSION,
     McpLocalServerConfig,
     McpRemoteServerConfig,
     McpServerConfig,
@@ -93,22 +94,38 @@ pub use types::{
     PreToolUseHookOutput,
     ProviderConfig,
     ResumeSessionConfig,
+    SDK_PROTOCOL_VERSION,
     // Selection types
     SelectionAttachment,
     SelectionPosition,
     SelectionRange,
+    // Session lifecycle types
+    SessionAgentGetCurrentResult,
+    SessionAgentInfo,
+    SessionAgentListResult,
+    SessionAgentSelectResult,
+    SessionCompactionCompactResult,
     SessionConfig,
     SessionEndHandler,
     SessionEndHookInput,
     SessionEndHookOutput,
+    SessionFleetStartResult,
     SessionHooks,
-    // Session lifecycle types
     SessionLifecycleEvent,
     SessionLifecycleEventMetadata,
+    SessionLogLevel,
+    SessionLogResult,
     SessionMetadata,
+    SessionModeGetResult,
+    SessionModeSetResult,
+    SessionModelGetCurrentResult,
+    SessionModelSwitchToResult,
+    SessionPlanReadResult,
     SessionStartHandler,
     SessionStartHookInput,
     SessionStartHookOutput,
+    SessionWorkspaceListFilesResult,
+    SessionWorkspaceReadFileResult,
     SetForegroundSessionResponse,
     StopError,
     SystemMessageConfig,
@@ -127,8 +144,8 @@ pub use types::{
     UserPromptSubmittedHandler,
     UserPromptSubmittedHookInput,
     UserPromptSubmittedHookOutput,
-    // Constants
-    SDK_PROTOCOL_VERSION,
+    // Session lifecycle event type constants
+    session_lifecycle_event_types,
 };
 
 // Re-export event types
@@ -143,16 +160,28 @@ pub use events::{
     AssistantTurnEndData,
     AssistantTurnStartData,
     AssistantUsageData,
+    CommandCompletedData,
+    CommandQueuedData,
     CompactionTokensUsed,
     CustomAgentCompletedData,
     CustomAgentFailedData,
     CustomAgentSelectedData,
     CustomAgentStartedData,
+    ElicitationCompletedData,
+    ElicitationMode,
+    ElicitationRequestedData,
+    ElicitationRequestedSchema,
+    ExitPlanModeCompletedData,
+    ExitPlanModeRequestedData,
+    ExternalToolCompletedData,
+    ExternalToolRequestedData,
     HandoffSourceType,
     HookEndData,
     HookError,
     HookStartData,
     PendingMessagesModifiedData,
+    PermissionCompletedData,
+    PermissionRequestedData,
     // Main event types
     RawSessionEvent,
     RepositoryInfo,
@@ -185,6 +214,8 @@ pub use events::{
     ToolRequestItem,
     ToolResultContent,
     ToolUserRequestedData,
+    UserInputCompletedData,
+    UserInputRequestedData,
     UserMessageAttachmentItem,
     UserMessageData,
 };
@@ -194,19 +225,20 @@ pub use transport::{MessageFramer, StdioTransport, Transport};
 
 // Re-export JSON-RPC types
 pub use jsonrpc::{
-    JsonRpcClient, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse, NotificationHandler,
-    RequestHandler,
+    JsonRpcClient, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
+    NotificationHandler, RequestHandler,
 };
 
 // Re-export process types
 pub use process::{
-    find_copilot_cli, find_executable, find_node, is_node_script, CopilotProcess, ProcessOptions,
+    CopilotProcess, ProcessOptions, find_copilot_cli, find_executable, find_node,
+    is_node_script,
 };
 
 // Re-export session types
 pub use session::{
-    EventHandler, EventSubscription, InvokeFuture, PermissionHandler, RegisteredTool, Session,
-    ToolHandler, UserInputHandler,
+    EventHandler, EventSubscription, InvokeFuture, PermissionHandler, RegisteredTool,
+    Session, ToolHandler, UserInputHandler,
 };
 
 // Re-export client types

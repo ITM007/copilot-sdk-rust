@@ -102,7 +102,11 @@ async fn main() -> copilot_sdk::Result<()> {
                         (a / b, "/")
                     }
                     "power" => (a.powf(b), "^"),
-                    _ => return ToolResultObject::text(format!("Unknown operation: {op}")),
+                    _ => {
+                        return ToolResultObject::text(format!(
+                            "Unknown operation: {op}"
+                        ));
+                    }
                 };
 
                 ToolResultObject::text(format!("{a} {symbol} {b} = {result}"))

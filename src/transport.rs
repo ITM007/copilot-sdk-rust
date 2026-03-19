@@ -53,7 +53,10 @@ pub struct StdioTransport {
 
 impl StdioTransport {
     /// Create a new stdio transport from child process handles.
-    pub fn new(stdin: tokio::process::ChildStdin, stdout: tokio::process::ChildStdout) -> Self {
+    pub fn new(
+        stdin: tokio::process::ChildStdin,
+        stdout: tokio::process::ChildStdout,
+    ) -> Self {
         Self {
             stdin,
             stdout: BufReader::new(stdout),
@@ -199,20 +202,25 @@ where
             if let Some(value) = lower_line.strip_prefix("content-length:") {
                 let value_str = value.trim();
                 content_length = Some(value_str.parse().map_err(|_| {
-                    CopilotError::Protocol(format!("Invalid Content-Length value: {}", value_str))
+                    CopilotError::Protocol(format!(
+                        "Invalid Content-Length value: {}",
+                        value_str
+                    ))
                 })?);
             }
         }
 
-        let content_length = content_length
-            .ok_or_else(|| CopilotError::Protocol("Missing Content-Length header".into()))?;
+        let content_length = content_length.ok_or_else(|| {
+            CopilotError::Protocol("Missing Content-Length header".into())
+        })?;
 
         // Read the message body
         let mut message = vec![0u8; content_length];
         self.read_exact(&mut message).await?;
 
-        String::from_utf8(message)
-            .map_err(|e| CopilotError::Protocol(format!("Invalid UTF-8 in message: {}", e)))
+        String::from_utf8(message).map_err(|e| {
+            CopilotError::Protocol(format!("Invalid UTF-8 in message: {}", e))
+        })
     }
 
     /// Read exactly n bytes.
@@ -333,21 +341,26 @@ impl<T: Transport> MessageFramer<T> {
             if let Some(value) = lower_line.strip_prefix("content-length:") {
                 let value_str = value.trim();
                 content_length = Some(value_str.parse().map_err(|_| {
-                    CopilotError::Protocol(format!("Invalid Content-Length value: {}", value_str))
+                    CopilotError::Protocol(format!(
+                        "Invalid Content-Length value: {}",
+                        value_str
+                    ))
                 })?);
             }
             // Ignore other headers (e.g., Content-Type)
         }
 
-        let content_length = content_length
-            .ok_or_else(|| CopilotError::Protocol("Missing Content-Length header".into()))?;
+        let content_length = content_length.ok_or_else(|| {
+            CopilotError::Protocol("Missing Content-Length header".into())
+        })?;
 
         // Read the message body
         let mut message = vec![0u8; content_length];
         self.read_exact(&mut message).await?;
 
-        String::from_utf8(message)
-            .map_err(|e| CopilotError::Protocol(format!("Invalid UTF-8 in message: {}", e)))
+        String::from_utf8(message).map_err(|e| {
+            CopilotError::Protocol(format!("Invalid UTF-8 in message: {}", e))
+        })
     }
 
     /// Write a message with Content-Length framing.
@@ -501,7 +514,8 @@ impl Transport for MemoryTransport {
             }
             let remaining = self.read_data.len() - self.read_pos;
             let to_read = remaining.min(buf.len());
-            buf[..to_read].copy_from_slice(&self.read_data[self.read_pos..self.read_pos + to_read]);
+            buf[..to_read]
+                .copy_from_slice(&self.read_data[self.read_pos..self.read_pos + to_read]);
             self.read_pos += to_read;
             Ok(to_read)
         })

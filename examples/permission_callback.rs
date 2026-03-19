@@ -4,8 +4,8 @@
 //! Permission callback example demonstrating custom permission handling.
 
 use copilot_sdk::{
-    Client, PermissionRequest, PermissionRequestResult, SessionConfig, SessionEventData, Tool,
-    ToolHandler, ToolResultObject,
+    Client, PermissionRequest, PermissionRequestResult, SessionConfig, SessionEventData,
+    Tool, ToolHandler, ToolResultObject,
 };
 use std::io::{self, Write};
 use std::sync::Arc;

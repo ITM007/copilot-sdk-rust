@@ -3,7 +3,9 @@
 
 //! BYOK (Bring Your Own Key) example demonstrating custom provider configuration.
 
-use copilot_sdk::{AzureOptions, Client, ProviderConfig, SessionConfig, SessionEventData};
+use copilot_sdk::{
+    AzureOptions, Client, ProviderConfig, SessionConfig, SessionEventData,
+};
 use std::env;
 use std::io::{self, Write};
 

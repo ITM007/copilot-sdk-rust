@@ -12,15 +12,15 @@ use crate::process::{CopilotProcess, ProcessOptions};
 use crate::session::Session;
 use crate::types::{
     ClientOptions, ConnectionState, GetAuthStatusResponse, GetForegroundSessionResponse,
-    GetStatusResponse, LogLevel, ModelInfo, PingResponse, ProviderConfig, ResumeSessionConfig,
-    SessionConfig, SessionLifecycleEvent, SessionMetadata, SetForegroundSessionResponse, StopError,
-    SDK_PROTOCOL_VERSION,
+    GetStatusResponse, LogLevel, MIN_PROTOCOL_VERSION, ModelInfo, PingResponse,
+    ProviderConfig, ResumeSessionConfig, SDK_PROTOCOL_VERSION, SessionConfig,
+    SessionLifecycleEvent, SessionMetadata, SetForegroundSessionResponse, StopError,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{Mutex, RwLock};
@@ -96,14 +96,16 @@ fn resolve_cli_command(cli_path: &Path, args: &[String]) -> (PathBuf, Vec<String
                 }
 
                 // Fallback: use cmd /c if we can't find the loader
-                let mut full_args = vec!["/c".to_string(), path.to_string_lossy().to_string()];
+                let mut full_args =
+                    vec!["/c".to_string(), path.to_string_lossy().to_string()];
                 full_args.extend(args_owned);
                 return (PathBuf::from("cmd"), full_args);
             }
 
             // For .bat files, use cmd /c
             if ext_lower == "bat" {
-                let mut full_args = vec!["/c".to_string(), path.to_string_lossy().to_string()];
+                let mut full_args =
+                    vec!["/c".to_string(), path.to_string_lossy().to_string()];
                 full_args.extend(args_owned);
                 return (PathBuf::from("cmd"), full_args);
             }
@@ -111,7 +113,8 @@ fn resolve_cli_command(cli_path: &Path, args: &[String]) -> (PathBuf, Vec<String
 
         // For non-absolute paths without extension, also use cmd /c for PATH resolution
         if !path.is_absolute() {
-            let mut full_args = vec!["/c".to_string(), path.to_string_lossy().to_string()];
+            let mut full_args =
+                vec!["/c".to_string(), path.to_string_lossy().to_string()];
             full_args.extend(args_owned);
             return (PathBuf::from("cmd"), full_args);
         }
@@ -200,6 +203,23 @@ fn normalize_tool_arguments(params: &Value) -> Value {
         Value::Null => json!({}),
         other => other,
     }
+}
+
+fn validate_protocol_version(protocol_version: Option<u32>) -> Result<u32> {
+    let version = protocol_version.ok_or(CopilotError::MissingProtocolVersion {
+        minimum: MIN_PROTOCOL_VERSION,
+        maximum: SDK_PROTOCOL_VERSION,
+    })?;
+
+    if !crate::types::is_supported_protocol_version(version) {
+        return Err(CopilotError::ProtocolMismatch {
+            minimum: MIN_PROTOCOL_VERSION,
+            maximum: SDK_PROTOCOL_VERSION,
+            actual: version,
+        });
+    }
+
+    Ok(version)
 }
 
 /// Handle a permission.request from the server.
@@ -451,7 +471,10 @@ impl RpcClient {
 
     async fn set_request_handler<F>(&self, handler: F)
     where
-        F: Fn(&str, &Value) -> crate::jsonrpc::RequestHandlerFuture + Send + Sync + 'static,
+        F: Fn(&str, &Value) -> crate::jsonrpc::RequestHandlerFuture
+            + Send
+            + Sync
+            + 'static,
     {
         let handler = Arc::new(handler);
         match self {
@@ -632,13 +655,18 @@ impl Client {
             return errors;
         }
 
-        // Best-effort destroy of all active sessions while still connected.
-        let sessions: Vec<Arc<Session>> = self.sessions.read().await.values().cloned().collect();
+        // Best-effort disconnect of all active sessions while still connected.
+        let sessions: Vec<Arc<Session>> =
+            self.sessions.read().await.values().cloned().collect();
         for session in sessions {
-            if let Err(e) = session.destroy().await {
+            if let Err(e) = session.disconnect().await {
                 errors.push(StopError {
-                    message: format!("Failed to destroy session {}: {}", session.session_id(), e),
-                    source: Some("session.destroy".into()),
+                    message: format!(
+                        "Failed to disconnect session {}: {}",
+                        session.session_id(),
+                        e
+                    ),
+                    source: Some("session.disconnect".into()),
                 });
             }
         }
@@ -690,7 +718,10 @@ impl Client {
     // =========================================================================
 
     /// Create a new Copilot session.
-    pub async fn create_session(&self, mut config: SessionConfig) -> Result<Arc<Session>> {
+    pub async fn create_session(
+        &self,
+        mut config: SessionConfig,
+    ) -> Result<Arc<Session>> {
         self.ensure_connected().await?;
 
         // Apply BYOK from environment if enabled and not explicitly set
@@ -711,7 +742,9 @@ impl Client {
         let session_id = result
             .get("sessionId")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| CopilotError::Protocol("Missing sessionId in response".into()))?
+            .ok_or_else(|| {
+                CopilotError::Protocol("Missing sessionId in response".into())
+            })?
             .to_string();
 
         // Extract workspace_path (for infinite sessions)
@@ -881,8 +914,9 @@ impl Client {
         self.ensure_connected().await?;
 
         let result = self.invoke("status.get", None).await?;
-        serde_json::from_value(result)
-            .map_err(|e| CopilotError::Protocol(format!("Failed to parse status response: {}", e)))
+        serde_json::from_value(result).map_err(|e| {
+            CopilotError::Protocol(format!("Failed to parse status response: {}", e))
+        })
     }
 
     /// Get current authentication status.
@@ -897,7 +931,7 @@ impl Client {
 
     /// List available models with their metadata.
     ///
-    /// Results are cached after the first call. Use [`clear_models_cache`] to force a refresh.
+    /// Results are cached after the first call. Use [`Self::clear_models_cache`] to force a refresh.
     ///
     /// # Errors
     /// Returns an error if not authenticated or if the request fails.
@@ -933,7 +967,9 @@ impl Client {
     }
 
     /// Get the foreground session ID and workspace path.
-    pub async fn get_foreground_session_id(&self) -> Result<GetForegroundSessionResponse> {
+    pub async fn get_foreground_session_id(
+        &self,
+    ) -> Result<GetForegroundSessionResponse> {
         self.ensure_connected().await?;
 
         let result = self.invoke("session.getForeground", None).await?;
@@ -952,7 +988,10 @@ impl Client {
         let params = json!({ "sessionId": session_id });
         let result = self.invoke("session.setForeground", Some(params)).await?;
         serde_json::from_value(result).map_err(|e| {
-            CopilotError::Protocol(format!("Failed to parse set foreground response: {}", e))
+            CopilotError::Protocol(format!(
+                "Failed to parse set foreground response: {}",
+                e
+            ))
         })
     }
 
@@ -989,7 +1028,11 @@ impl Client {
     // =========================================================================
 
     /// Invoke a JSON-RPC method.
-    pub(crate) async fn invoke(&self, method: &str, params: Option<Value>) -> Result<Value> {
+    pub(crate) async fn invoke(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value> {
         let mut attempt = 0;
 
         loop {
@@ -1078,7 +1121,9 @@ impl Client {
             .clone()
             .or_else(crate::process::find_copilot_cli)
             .ok_or_else(|| {
-                CopilotError::InvalidConfig("Could not find Copilot CLI executable".into())
+                CopilotError::InvalidConfig(
+                    "Could not find Copilot CLI executable".into(),
+                )
             })?;
 
         let log_level = self.options.log_level.to_string();
@@ -1180,7 +1225,9 @@ impl Client {
             RpcClient::Stdio(rpc)
         } else {
             let stdout = process.take_stdout().ok_or_else(|| {
-                CopilotError::InvalidConfig("Failed to capture stdout for port detection".into())
+                CopilotError::InvalidConfig(
+                    "Failed to capture stdout for port detection".into(),
+                )
             })?;
 
             let detected_port = detect_tcp_port_from_stdout(stdout).await?;
@@ -1196,7 +1243,7 @@ impl Client {
         Ok(())
     }
 
-    /// Verify protocol version matches.
+    /// Verify protocol version is compatible with this SDK.
     async fn verify_protocol_version(&self) -> Result<()> {
         // NOTE: We call the underlying RPC directly instead of ping() because ping() calls
         // ensure_connected(), but we haven't set state to Connected yet.
@@ -1211,14 +1258,7 @@ impl Client {
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
 
-        if let Some(version) = protocol_version {
-            if version != SDK_PROTOCOL_VERSION {
-                return Err(CopilotError::ProtocolMismatch {
-                    expected: SDK_PROTOCOL_VERSION,
-                    actual: version,
-                });
-            }
-        }
+        validate_protocol_version(protocol_version)?;
 
         Ok(())
     }
@@ -1240,7 +1280,9 @@ impl Client {
 
                 // Spawn a task to handle the event
                 tokio::spawn(async move {
-                    if let Some(session_id) = params.get("sessionId").and_then(|v| v.as_str()) {
+                    if let Some(session_id) =
+                        params.get("sessionId").and_then(|v| v.as_str())
+                    {
                         if let Some(session) = sessions.read().await.get(session_id) {
                             if let Some(event_data) = params.get("event") {
                                 if let Ok(event) = SessionEvent::from_json(event_data) {
@@ -1255,7 +1297,9 @@ impl Client {
                 let params = params.clone();
 
                 tokio::spawn(async move {
-                    if let Ok(event) = serde_json::from_value::<SessionLifecycleEvent>(params) {
+                    if let Ok(event) =
+                        serde_json::from_value::<SessionLifecycleEvent>(params)
+                    {
                         let handlers = lifecycle_handlers.read().await;
                         for handler in handlers.values() {
                             handler(&event);
@@ -1280,8 +1324,12 @@ impl Client {
             Box::pin(async move {
                 let result = match method.as_str() {
                     "tool.call" => handle_tool_call(&sessions, &params).await,
-                    "permission.request" => handle_permission_request(&sessions, &params).await,
-                    "userInput.request" => handle_user_input_request(&sessions, &params).await,
+                    "permission.request" => {
+                        handle_permission_request(&sessions, &params).await
+                    }
+                    "userInput.request" => {
+                        handle_user_input_request(&sessions, &params).await
+                    }
                     "hooks.invoke" => handle_hooks_invoke(&sessions, &params).await,
                     _ => {
                         return Err(JsonRpcError::new(
@@ -1524,6 +1572,11 @@ impl ClientBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::Session;
+    use crate::types::{PermissionRequestResult, Tool, ToolResultObject};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
 
     #[test]
     fn test_client_builder() {
@@ -1675,5 +1728,182 @@ mod tests {
             "arguments": "{not valid json"
         });
         assert_eq!(normalize_tool_arguments(&params), json!({}));
+    }
+
+    #[test]
+    fn test_validate_protocol_version_accepts_supported_range() {
+        assert_eq!(
+            validate_protocol_version(Some(MIN_PROTOCOL_VERSION)).unwrap(),
+            MIN_PROTOCOL_VERSION
+        );
+        assert_eq!(
+            validate_protocol_version(Some(SDK_PROTOCOL_VERSION)).unwrap(),
+            SDK_PROTOCOL_VERSION
+        );
+    }
+
+    #[test]
+    fn test_validate_protocol_version_rejects_missing_version() {
+        assert!(matches!(
+            validate_protocol_version(None),
+            Err(CopilotError::MissingProtocolVersion {
+                minimum: MIN_PROTOCOL_VERSION,
+                maximum: SDK_PROTOCOL_VERSION,
+            })
+        ));
+    }
+
+    #[test]
+    fn test_validate_protocol_version_rejects_out_of_range_versions() {
+        assert!(matches!(
+            validate_protocol_version(Some(MIN_PROTOCOL_VERSION - 1)),
+            Err(CopilotError::ProtocolMismatch {
+                minimum: MIN_PROTOCOL_VERSION,
+                maximum: SDK_PROTOCOL_VERSION,
+                actual: 1,
+            })
+        ));
+        assert!(matches!(
+            validate_protocol_version(Some(SDK_PROTOCOL_VERSION + 1)),
+            Err(CopilotError::ProtocolMismatch {
+                minimum: MIN_PROTOCOL_VERSION,
+                maximum: SDK_PROTOCOL_VERSION,
+                actual: 4,
+            })
+        ));
+    }
+
+    fn noop_invoke(
+        _method: &str,
+        _params: Option<Value>,
+    ) -> crate::session::InvokeFuture {
+        Box::pin(async { Ok(serde_json::json!({ "success": true })) })
+    }
+
+    #[tokio::test]
+    async fn test_handle_tool_call_v2_uses_session_tool_handler() {
+        let session = Arc::new(Session::new("session-1".to_string(), None, noop_invoke));
+        session
+            .register_tool_with_handler(
+                Tool::new("echo"),
+                Some(Arc::new(|_, args| {
+                    ToolResultObject::text(
+                        args.get("text")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("missing"),
+                    )
+                })),
+            )
+            .await;
+
+        let sessions = RwLock::new(HashMap::from([("session-1".to_string(), session)]));
+        let response = handle_tool_call(
+            &sessions,
+            &serde_json::json!({
+                "sessionId": "session-1",
+                "toolName": "echo",
+                "argumentsJson": "{\"text\":\"hello v2\"}"
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            response,
+            serde_json::json!({
+                "result": {
+                    "textResultForLlm": "hello v2",
+                    "resultType": "success"
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_permission_request_v2_uses_session_permission_handler() {
+        let session = Arc::new(Session::new("session-2".to_string(), None, noop_invoke));
+        session
+            .register_permission_handler(|request| {
+                assert_eq!(request.kind, "shell");
+                PermissionRequestResult::approved()
+            })
+            .await;
+
+        let sessions = RwLock::new(HashMap::from([("session-2".to_string(), session)]));
+        let response = handle_permission_request(
+            &sessions,
+            &serde_json::json!({
+                "sessionId": "session-2",
+                "permissionRequest": {
+                    "kind": "shell",
+                    "toolCallId": "call-2",
+                    "fullCommandText": "ls"
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            response,
+            serde_json::json!({
+                "result": {
+                    "kind": "approved"
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_permission_request_flat_payload_uses_session_permission_handler()
+    {
+        let session = Arc::new(Session::new("session-3".to_string(), None, noop_invoke));
+        session
+            .register_permission_handler(|request| {
+                assert_eq!(request.kind, "shell");
+                assert_eq!(request.tool_call_id.as_deref(), Some("call-3"));
+                assert_eq!(
+                    request
+                        .extension_data
+                        .get("fullCommandText")
+                        .and_then(|value| value.as_str()),
+                    Some("ls -la")
+                );
+
+                PermissionRequestResult {
+                    kind: "approved".to_string(),
+                    rules: Some(vec![serde_json::json!({
+                        "tool": "shell(ls -la)"
+                    })]),
+                }
+            })
+            .await;
+
+        let sessions = RwLock::new(HashMap::from([("session-3".to_string(), session)]));
+        let response = handle_permission_request(
+            &sessions,
+            &serde_json::json!({
+                "sessionId": "session-3",
+                "kind": "shell",
+                "toolCallId": "call-3",
+                "fullCommandText": "ls -la"
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            response,
+            serde_json::json!({
+                "result": {
+                    "kind": "approved",
+                    "rules": [
+                        {
+                            "tool": "shell(ls -la)"
+                        }
+                    ]
+                }
+            })
+        );
     }
 }

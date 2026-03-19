@@ -4,7 +4,8 @@
 //! Attachments example demonstrating file and directory attachments.
 
 use copilot_sdk::{
-    AttachmentType, Client, MessageOptions, SessionConfig, SessionEventData, UserMessageAttachment,
+    AttachmentType, Client, MessageOptions, SessionConfig, SessionEventData,
+    UserMessageAttachment,
 };
 use std::fs;
 use std::io::{self, Write};

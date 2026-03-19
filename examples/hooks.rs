@@ -8,7 +8,9 @@
 //! 2. Register PostToolUse hooks to inspect/modify tool results
 //! 3. Register session lifecycle hooks (start, end, error)
 
-use copilot_sdk::{Client, PreToolUseHookOutput, SessionConfig, SessionEventData, SessionHooks};
+use copilot_sdk::{
+    Client, PreToolUseHookOutput, SessionConfig, SessionEventData, SessionHooks,
+};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
@@ -47,7 +49,9 @@ async fn main() -> copilot_sdk::Result<()> {
                     log1("PreToolUse", &format!("DENIED: {}", input.tool_name));
                     return PreToolUseHookOutput {
                         permission_decision: Some("deny".into()),
-                        permission_decision_reason: Some("This tool is blocked by policy".into()),
+                        permission_decision_reason: Some(
+                            "This tool is blocked by policy".into(),
+                        ),
                         ..Default::default()
                     };
                 }

@@ -7,8 +7,8 @@
 //! `cargo run --example escape_room`
 
 use copilot_sdk::{
-    find_copilot_cli, Client, LogLevel, SessionConfig, SessionEventData, SystemMessageConfig,
-    SystemMessageMode, Tool, ToolHandler, ToolResultObject,
+    Client, LogLevel, SessionConfig, SessionEventData, SystemMessageConfig,
+    SystemMessageMode, Tool, ToolHandler, ToolResultObject, find_copilot_cli,
 };
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -141,7 +141,8 @@ async fn main() -> copilot_sdk::Result<()> {
         };
         let factors = prime_factors(n);
         ToolResultObject::text(
-            serde_json::json!({ "n": n, "factors": factors, "count": factors.len() }).to_string(),
+            serde_json::json!({ "n": n, "factors": factors, "count": factors.len() })
+                .to_string(),
         )
     });
     session

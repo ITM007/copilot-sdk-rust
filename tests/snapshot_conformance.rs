@@ -5,7 +5,7 @@
 
 use copilot_sdk::transport::{MessageReader, MessageWriter};
 use copilot_sdk::{Client, LogLevel, SessionConfig, Tool, ToolHandler, ToolResultObject};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -139,7 +139,8 @@ fn parse_snapshot(path: &Path) -> Option<SnapshotTest> {
                     let args_str = yaml_get(func, "arguments")
                         .and_then(yaml_str)
                         .unwrap_or("{}");
-                    let args: Value = serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
+                    let args: Value =
+                        serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
 
                     if let Some(last) = turns.last_mut() {
                         last.tool_calls.push(ToolCallExpectation {
@@ -465,17 +466,18 @@ async fn snapshot_conformance_tools_and_sessions() -> copilot_sdk::Result<()> {
 
         let tools = build_tools_and_schemas(&test);
 
-        let (server, port) = SnapshotServer::bind(test.turns.clone())
-            .await
-            .map_err(|e| {
-                copilot_sdk::CopilotError::Transport(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
-            })?;
+        let (server, port) =
+            SnapshotServer::bind(test.turns.clone())
+                .await
+                .map_err(|e| {
+                    copilot_sdk::CopilotError::Transport(std::io::Error::other(
+                        e.to_string(),
+                    ))
+                })?;
         let server_task = tokio::spawn(async move { server.run().await });
 
-        let captured: Arc<StdMutex<Vec<(String, Value)>>> = Arc::new(StdMutex::new(Vec::new()));
+        let captured: Arc<StdMutex<Vec<(String, Value)>>> =
+            Arc::new(StdMutex::new(Vec::new()));
         let captured_handlers = Arc::clone(&captured);
 
         let client = Client::builder()
@@ -506,7 +508,8 @@ async fn snapshot_conformance_tools_and_sessions() -> copilot_sdk::Result<()> {
                 .await;
         }
 
-        let mut expected_by_prompt: HashMap<String, Vec<(String, Value)>> = HashMap::new();
+        let mut expected_by_prompt: HashMap<String, Vec<(String, Value)>> =
+            HashMap::new();
         for turn in &test.turns {
             let calls = turn
                 .tool_calls
@@ -542,7 +545,8 @@ async fn snapshot_conformance_tools_and_sessions() -> copilot_sdk::Result<()> {
         let join = tokio::time::timeout(Duration::from_secs(5), server_task)
             .await
             .map_err(|_| copilot_sdk::CopilotError::Timeout(Duration::from_secs(5)))?;
-        let server_res = join.map_err(|e| copilot_sdk::CopilotError::Protocol(e.to_string()))?;
+        let server_res =
+            join.map_err(|e| copilot_sdk::CopilotError::Protocol(e.to_string()))?;
         server_res?;
     }
 

@@ -123,6 +123,56 @@ fn resolve_cli_command(cli_path: &Path, args: &[String]) -> (PathBuf, Vec<String
     (path, args_owned)
 }
 
+fn build_cli_args(options: &ClientOptions) -> Vec<String> {
+    let mut args = options.cli_args.clone().unwrap_or_default();
+
+    if let Some(deny_tools) = &options.deny_tools {
+        for tool_spec in deny_tools {
+            args.push("--deny-tool".to_string());
+            args.push(tool_spec.clone());
+        }
+    }
+
+    if let Some(allow_tools) = &options.allow_tools {
+        for tool_spec in allow_tools {
+            args.push("--allow-tool".to_string());
+            args.push(tool_spec.clone());
+        }
+    }
+
+    if options.allow_all_tools {
+        args.push("--allow-all-tools".to_string());
+    }
+
+    args.extend([
+        "--server".to_string(),
+        "--log-level".to_string(),
+        options.log_level.to_string(),
+    ]);
+
+    if options.use_stdio {
+        args.push("--stdio".to_string());
+    } else if options.port != 0 {
+        args.extend(["--port".to_string(), options.port.to_string()]);
+    }
+
+    if options.github_token.is_some() {
+        args.push("--auth-token-env".to_string());
+        args.push("COPILOT_SDK_AUTH_TOKEN".to_string());
+    }
+
+    if let Some(false) = options.use_logged_in_user {
+        args.push("--no-auto-login".to_string());
+    }
+
+    if let Some(client_name) = &options.client_name {
+        args.push("--client-name".to_string());
+        args.push(client_name.clone());
+    }
+
+    args
+}
+
 fn spawn_cli_stderr_logger(stderr: tokio::process::ChildStderr) {
     tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
@@ -1126,52 +1176,7 @@ impl Client {
                 )
             })?;
 
-        let log_level = self.options.log_level.to_string();
-
-        let mut args: Vec<String> = Vec::new();
-        if let Some(extra_args) = &self.options.cli_args {
-            args.extend(extra_args.iter().cloned());
-        }
-
-        // Add deny-tool arguments
-        if let Some(deny_tools) = &self.options.deny_tools {
-            for tool_spec in deny_tools {
-                args.push("--deny-tool".to_string());
-                args.push(tool_spec.clone());
-            }
-        }
-
-        // Add allow-tool arguments
-        if let Some(allow_tools) = &self.options.allow_tools {
-            for tool_spec in allow_tools {
-                args.push("--allow-tool".to_string());
-                args.push(tool_spec.clone());
-            }
-        }
-
-        // Add allow-all-tools flag
-        if self.options.allow_all_tools {
-            args.push("--allow-all-tools".to_string());
-        }
-
-        args.extend(["--server".to_string(), "--log-level".to_string(), log_level]);
-
-        if self.options.use_stdio {
-            args.push("--stdio".to_string());
-        } else if self.options.port != 0 {
-            args.extend(["--port".to_string(), self.options.port.to_string()]);
-        }
-
-        // Wire github_token auth: CLI flag for auth token env var
-        if self.options.github_token.is_some() {
-            args.push("--auth-token-env".to_string());
-            args.push("COPILOT_SDK_AUTH_TOKEN".to_string());
-        }
-
-        // Wire use_logged_in_user: when false, pass --no-auto-login
-        if let Some(false) = self.options.use_logged_in_user {
-            args.push("--no-auto-login".to_string());
-        }
+        let args = build_cli_args(&self.options);
 
         // Resolve command and arguments based on platform
         // On Windows, use cmd /c for PATH resolution if path is not absolute (for .cmd files)
@@ -1200,13 +1205,6 @@ impl Client {
         // Wire github_token auth: pass via environment variable + CLI flag
         if let Some(ref token) = self.options.github_token {
             proc_options = proc_options.env("COPILOT_SDK_AUTH_TOKEN", token);
-            args.push("--auth-token-env".to_string());
-            args.push("COPILOT_SDK_AUTH_TOKEN".to_string());
-        }
-
-        // Wire use_logged_in_user: when false, pass --no-auto-login
-        if let Some(false) = self.options.use_logged_in_user {
-            args.push("--no-auto-login".to_string());
         }
 
         let args_refs: Vec<&str> = full_args.iter().map(|s| s.as_str()).collect();
@@ -1480,6 +1478,12 @@ impl ClientBuilder {
         self
     }
 
+    /// Set the client name passed to the Copilot CLI.
+    pub fn client_name(mut self, name: impl Into<String>) -> Self {
+        self.options.client_name = Some(name.into());
+        self
+    }
+
     /// Add a single tool specification to deny.
     ///
     /// Passed as `--deny-tool` to the CLI. Takes precedence over allow options.
@@ -1587,9 +1591,48 @@ mod tests {
             .log_level(LogLevel::Debug)
             .cwd("/tmp")
             .env("FOO", "bar")
+            .client_name("rust-sdk-test")
             .build();
 
         assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_client_builder_client_name() {
+        let client = Client::builder()
+            .client_name("rust-sdk-test")
+            .build()
+            .unwrap();
+
+        assert_eq!(client.options.client_name.as_deref(), Some("rust-sdk-test"));
+    }
+
+    #[test]
+    fn test_build_cli_args_includes_client_name() {
+        let args = build_cli_args(&ClientOptions {
+            cli_args: Some(vec!["--model".to_string(), "gpt-5".to_string()]),
+            github_token: Some("ghp_abc123".to_string()),
+            use_logged_in_user: Some(false),
+            client_name: Some("rust-sdk-test".to_string()),
+            ..Default::default()
+        });
+
+        assert_eq!(
+            args,
+            vec![
+                "--model".to_string(),
+                "gpt-5".to_string(),
+                "--server".to_string(),
+                "--log-level".to_string(),
+                "info".to_string(),
+                "--stdio".to_string(),
+                "--auth-token-env".to_string(),
+                "COPILOT_SDK_AUTH_TOKEN".to_string(),
+                "--no-auto-login".to_string(),
+                "--client-name".to_string(),
+                "rust-sdk-test".to_string(),
+            ]
+        );
     }
 
     #[test]

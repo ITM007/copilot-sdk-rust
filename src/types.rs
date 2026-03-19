@@ -1013,6 +1013,9 @@ pub struct ClientOptions {
     /// This allows Copilot to use any tool without asking for approval.
     /// Use `deny_tools` in combination to create an allowlist with exceptions.
     pub allow_all_tools: bool,
+
+    /// Client name passed to the CLI to identify the SDK consumer.
+    pub client_name: Option<String>,
 }
 
 impl Default for ClientOptions {
@@ -1033,6 +1036,7 @@ impl Default for ClientOptions {
             deny_tools: None,
             allow_tools: None,
             allow_all_tools: false,
+            client_name: None,
         }
     }
 }

@@ -1311,6 +1311,131 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_phase6_external_tool_broadcast_reaches_all_subscribers_and_v3_adapter()
+    {
+        let (rpc_tx, mut rpc_rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, recording_invoke(rpc_tx));
+        let mut sub1 = session.subscribe();
+        let mut sub2 = session.subscribe();
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let callback_count_clone = Arc::clone(&callback_count);
+
+        let _unsubscribe = session
+            .on(move |event| {
+                assert_eq!(event.id, "evt-external-tool-shared");
+                callback_count_clone.fetch_add(1, Ordering::SeqCst);
+            })
+            .await;
+
+        session
+            .register_tool_with_handler(
+                Tool::new("echo"),
+                Some(Arc::new(|_, _| ToolResultObject::text("shared"))),
+            )
+            .await;
+
+        let event = SessionEvent::from_json(&serde_json::json!({
+            "id": "evt-external-tool-shared",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "type": "external_tool.requested",
+            "data": {
+                "requestId": "request-shared",
+                "sessionId": "test",
+                "toolCallId": "tool-call-shared",
+                "toolName": "echo"
+            }
+        }))
+        .unwrap();
+
+        session.dispatch_event(event.clone()).await;
+
+        assert_eq!(sub1.recv().await.unwrap().id, event.id);
+        assert_eq!(sub2.recv().await.unwrap().id, event.id);
+        assert_eq!(callback_count.load(Ordering::SeqCst), 1);
+
+        let (method, params) = timeout(Duration::from_secs(1), rpc_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(method, "session.tools.handlePendingToolCall");
+        assert_eq!(
+            params.unwrap(),
+            serde_json::json!({
+                "sessionId": "test",
+                "requestId": "request-shared",
+                "result": {
+                    "textResultForLlm": "shared",
+                    "resultType": "success"
+                }
+            })
+        );
+        assert!(
+            timeout(Duration::from_millis(50), rpc_rx.recv())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase6_external_tool_v3_forwards_session_log_and_telemetry() {
+        let (rpc_tx, mut rpc_rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, recording_invoke(rpc_tx));
+        let tool_telemetry = HashMap::from([
+            ("cacheHit".to_string(), serde_json::json!(true)),
+            ("durationMs".to_string(), serde_json::json!(12)),
+        ]);
+
+        session
+            .register_tool_with_handler(
+                Tool::new("echo"),
+                Some(Arc::new(move |_, _| {
+                    let mut result = ToolResultObject::text("hello");
+                    result.session_log = Some("echo complete".to_string());
+                    result.tool_telemetry = Some(tool_telemetry.clone());
+                    result
+                })),
+            )
+            .await;
+
+        let event = SessionEvent::from_json(&serde_json::json!({
+            "id": "evt-external-tool-telemetry",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "type": "external_tool.requested",
+            "data": {
+                "requestId": "request-telemetry",
+                "sessionId": "test",
+                "toolCallId": "tool-call-telemetry",
+                "toolName": "echo"
+            }
+        }))
+        .unwrap();
+
+        session.dispatch_event(event).await;
+
+        let (method, params) = timeout(Duration::from_secs(1), rpc_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(method, "session.tools.handlePendingToolCall");
+        assert_eq!(
+            params.unwrap(),
+            serde_json::json!({
+                "sessionId": "test",
+                "requestId": "request-telemetry",
+                "result": {
+                    "textResultForLlm": "hello",
+                    "resultType": "success",
+                    "sessionLog": "echo complete",
+                    "toolTelemetry": {
+                        "cacheHit": true,
+                        "durationMs": 12
+                    }
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn test_dispatch_event_ignores_external_tool_requested_without_handler() {
         let (rpc_tx, mut rpc_rx) = mpsc::unbounded_channel();
         let session = Session::new("test".to_string(), None, recording_invoke(rpc_tx));
@@ -1407,6 +1532,71 @@ mod tests {
                     "kind": "approved"
                 }
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase6_permission_broadcast_reaches_all_subscribers_and_v3_adapter() {
+        let (rpc_tx, mut rpc_rx) = mpsc::unbounded_channel();
+        let session = Session::new("test".to_string(), None, recording_invoke(rpc_tx));
+        let mut sub1 = session.subscribe();
+        let mut sub2 = session.subscribe();
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let callback_count_clone = Arc::clone(&callback_count);
+
+        let _unsubscribe = session
+            .on(move |event| {
+                assert_eq!(event.id, "evt-permission-shared");
+                callback_count_clone.fetch_add(1, Ordering::SeqCst);
+            })
+            .await;
+
+        session
+            .register_permission_handler(|request| {
+                assert_eq!(request.kind, "shell");
+                PermissionRequestResult::approved()
+            })
+            .await;
+
+        let event = SessionEvent::from_json(&serde_json::json!({
+            "id": "evt-permission-shared",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "type": "permission.requested",
+            "data": {
+                "requestId": "request-permission-shared",
+                "permissionRequest": {
+                    "kind": "shell",
+                    "toolCallId": "tool-call-shared"
+                }
+            }
+        }))
+        .unwrap();
+
+        session.dispatch_event(event.clone()).await;
+
+        assert_eq!(sub1.recv().await.unwrap().id, event.id);
+        assert_eq!(sub2.recv().await.unwrap().id, event.id);
+        assert_eq!(callback_count.load(Ordering::SeqCst), 1);
+
+        let (method, params) = timeout(Duration::from_secs(1), rpc_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(method, "session.permissions.handlePendingPermissionRequest");
+        assert_eq!(
+            params.unwrap(),
+            serde_json::json!({
+                "sessionId": "test",
+                "requestId": "request-permission-shared",
+                "result": {
+                    "kind": "approved"
+                }
+            })
+        );
+        assert!(
+            timeout(Duration::from_millis(50), rpc_rx.recv())
+                .await
+                .is_err()
         );
     }
 

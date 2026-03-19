@@ -14,7 +14,9 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> copilot_sdk::Result<()> {
-//!     let client = Client::builder().build()?;
+//!     let client = Client::builder()
+//!         .client_name("my-app")
+//!         .build()?;
 //!     client.start().await?;
 //!
 //!     let session = client.create_session(SessionConfig::default()).await?;

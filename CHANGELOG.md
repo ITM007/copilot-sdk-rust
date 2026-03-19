@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.32-1
+
+- republish the v0.1.32 cut with a semver-valid Cargo release suffix
+
 ## v0.1.32
 
 - add protocol compatibility for CLI protocol versions `2..=3`

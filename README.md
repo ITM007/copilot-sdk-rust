@@ -16,7 +16,7 @@ Once published, add:
 
 ```toml
 [dependencies]
-copilot-sdk = "0.1.32"
+copilot-sdk = "0.1.32-1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
@@ -34,7 +34,9 @@ use copilot_sdk::{Client, SessionConfig};
 
 #[tokio::main]
 async fn main() -> copilot_sdk::Result<()> {
-    let client = Client::builder().build()?;
+    let client = Client::builder()
+        .client_name("my-app")
+        .build()?;
     client.start().await?;
 
     let session = client.create_session(SessionConfig::default()).await?;

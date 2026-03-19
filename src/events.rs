@@ -1135,6 +1135,29 @@ mod tests {
     }
 
     #[test]
+    fn test_phase6_parse_tool_execution_complete_with_tool_telemetry() {
+        let json = json!({
+            "id": "evt_tool_telemetry",
+            "timestamp": "2024-01-15T10:30:04Z",
+            "type": "tool.execution_complete",
+            "data": {
+                "toolCallId": "call_telemetry",
+                "success": true,
+                "toolTelemetry": {
+                    "cacheHit": true,
+                    "durationMs": 12
+                }
+            }
+        });
+
+        let event = SessionEvent::from_json(&json).unwrap();
+        let tool = event.as_tool_execution_complete().unwrap();
+        let telemetry = tool.tool_telemetry.as_ref().unwrap();
+        assert_eq!(telemetry.get("cacheHit"), Some(&json!(true)));
+        assert_eq!(telemetry.get("durationMs"), Some(&json!(12)));
+    }
+
+    #[test]
     fn test_parse_unknown_event() {
         let json = json!({
             "id": "evt_128",
